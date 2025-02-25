@@ -107,14 +107,12 @@ class WanVideoModel(comfy.model_base.BaseModel):
     def __setitem__(self, k, v):
         self.pipeline[k] = v
 
-from comfy.latent_formats import LatentFormat
-
 
 class WanVideoModelConfig:
     def __init__(self, dtype):
         self.unet_config = {}
         self.unet_extra_config = {}
-        self.latent_format = comfy.latent_formats.HunyuanVideo #todo better values
+        self.latent_format = comfy.latent_formats.HunyuanVideo #todo: change to WanVideo
         self.latent_format.latent_channels = 16
         self.manual_cast_dtype = dtype
         self.sampling_settings = {"multiplier": 1.0}
@@ -227,7 +225,6 @@ class WanVideoModelLoader:
                 set_module_tensor_to_device(transformer, name, device=transformer_load_device, dtype=dtype_to_use, value=sd[name])
 
             comfy_model.diffusion_model = transformer
-            comfy_model.load_device = transformer_load_device
             patcher = comfy.model_patcher.ModelPatcher(comfy_model, device, offload_device)
 
             del sd
@@ -355,7 +352,7 @@ class WanVideoVAELoader:
             }
         }
 
-    RETURN_TYPES = ("WANVAE",)
+    RETURN_TYPES = ("VAE",)
     RETURN_NAMES = ("vae", )
     FUNCTION = "loadmodel"
     CATEGORY = "WanVideoWrapper"
@@ -372,10 +369,6 @@ class WanVideoVAELoader:
         #    vae_config = json.load(f)
         model_path = folder_paths.get_full_path("vae", model_name)
         vae_sd = load_torch_file(model_path, safe_load=True)
-
-        has_model_prefix = any(k.startswith("model.") for k in vae_sd.keys())
-        if not has_model_prefix:
-            vae_sd = {f"model.{k}": v for k, v in vae_sd.items()}
         
         vae = WanVideoVAE(dtype=dtype)
         vae.load_state_dict(vae_sd)
@@ -553,7 +546,7 @@ class WanVideoImageClipEncode:
         return {"required": {
             "clip": ("WANCLIP",),
             "image": ("IMAGE", {"tooltip": "Image to encode"}),
-            "vae": ("WANVAE",),
+            "vae": ("VAE",),
             "generation_width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Width of the image to encode"}),
             "generation_height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Height of the image to encode"}),
             "num_frames": ("INT", {"default": 81, "min": 5, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
@@ -712,7 +705,6 @@ class WanVideoSampler:
     CATEGORY = "WanVideoWrapper"
 
     def process(self, model, text_embeds, image_embeds, shift, steps, cfg, seed, scheduler, riflex_freq_index, force_offload=True):
-        patcher = model
         model = model.model
         transformer = model.diffusion_model
 
@@ -730,28 +722,6 @@ class WanVideoSampler:
         else:
             transformer.to(device)
 
-
-        # # Initialize TeaCache if enabled
-        # if teacache_args is not None:
-        #     # Check if dimensions have changed since last run
-        #     if (not hasattr(transformer, 'last_dimensions') or
-        #             transformer.last_dimensions != (height, width, num_frames) or
-        #             not hasattr(transformer, 'last_frame_count') or
-        #             transformer.last_frame_count != num_frames):
-        #         # Reset TeaCache state on dimension change
-        #         transformer.cnt = 0
-        #         transformer.accumulated_rel_l1_distance = 0
-        #         transformer.previous_modulated_input = None
-        #         transformer.previous_residual = None
-        #         transformer.last_dimensions = (height, width, num_frames)
-        #         transformer.last_frame_count = num_frames
-
-        #     transformer.enable_teacache = True
-        #     transformer.num_steps = steps
-        #     transformer.rel_l1_thresh = teacache_args["rel_l1_thresh"]
-        # else:
-        #     transformer.enable_teacache = False
-
         mm.soft_empty_cache()
         gc.collect()
 
@@ -759,9 +729,6 @@ class WanVideoSampler:
             torch.cuda.reset_peak_memory_stats(device)
         except:
             pass
-
-        #for name, param in transformer.named_parameters():
-        #    print(name, param.data.device)
 
         if scheduler == 'unipc':
             sample_scheduler = FlowUniPCMultistepScheduler(
@@ -793,28 +760,28 @@ class WanVideoSampler:
         seed_g = torch.Generator(device=torch.device("cpu"))
         seed_g.manual_seed(seed)
         if transformer.model_type == "i2v":
-            noise = torch.randn(
+            # For i2v, create the latent tensor directly with dimensions from image_embeds
+            latent = torch.randn(
                 16,
                 (image_embeds["num_frames"] - 1) // 4 + 1,
                 image_embeds["lat_h"],
                 image_embeds["lat_w"],
                 dtype=torch.float32,
                 generator=seed_g,
-                device=torch.device("cpu"))
+                device=torch.device("cpu")).to(device)
             seq_len = image_embeds["max_seq_len"]
         else: #t2v
+            # For t2v, get target_shape and create the latent with those dimensions
             target_shape = image_embeds["target_shape"]
+            latent = torch.randn(
+                target_shape[0],
+                target_shape[1],
+                target_shape[2],
+                target_shape[3],
+                dtype=torch.float32,
+                device=torch.device("cpu"),
+                generator=seed_g).to(device)
             seq_len = image_embeds["max_seq_len"]
-            noise = torch.randn(
-                    target_shape[0],
-                    target_shape[1],
-                    target_shape[2],
-                    target_shape[3],
-                    dtype=torch.float32,
-                    device=torch.device("cpu"),
-                    generator=seed_g)
-
-        latent = noise.to(device)
 
         d = transformer.dim // transformer.num_heads
         freqs = torch.cat([
@@ -843,11 +810,8 @@ class WanVideoSampler:
         
         pbar = ProgressBar(steps)
 
-        from latent_preview import prepare_callback
-        callback = prepare_callback(patcher, steps)
-
         with torch.autocast(device_type=mm.get_autocast_device(device), dtype=model["dtype"], enabled=True):
-            for i, t in enumerate(tqdm(timesteps)):
+            for _, t in enumerate(tqdm(timesteps)):
                 latent_model_input = [latent.to(device)]
                 timestep = [t]
 
@@ -873,16 +837,8 @@ class WanVideoSampler:
                 latent = temp_x0.squeeze(0)
 
                 x0 = [latent.to(device)]
-                
-                if callback is not None:
-                    print(t)
-                    print("latent_model_input", latent_model_input[0].shape)
-                    print("noise_pred", noise_pred.shape)
-                    callback_latent = (latent_model_input[0].cpu() - noise_pred * t.cpu() / 1000).detach().permute(1,0,2,3)
-                    callback(i, callback_latent, None, steps)
-                else:
-                    pbar.update(1)
                 del latent_model_input, timestep
+                pbar.update(1)
 
         if force_offload:
             transformer.to(offload_device)
@@ -904,7 +860,7 @@ class WanVideoDecode:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "vae": ("WANVAE",),
+                    "vae": ("VAE",),
                     "samples": ("LATENT",),
                     "enable_vae_tiling": ("BOOLEAN", {"default": True, "tooltip": "Drastically reduces memory use but may introduce seams"}),
                     "tile_x": ("INT", {"default": 272, "min": 64, "max": 2048, "step": 1, "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"}),
@@ -946,7 +902,7 @@ class WanVideoEncode:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "vae": ("WANVAE",),
+                    "vae": ("VAE",),
                     "image": ("IMAGE",),
                     "enable_vae_tiling": ("BOOLEAN", {"default": True, "tooltip": "Drastically reduces memory use but may introduce seams"}),
                     "tile_x": ("INT", {"default": 272, "min": 64, "max": 2048, "step": 1, "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"}),
@@ -994,11 +950,11 @@ class WanVideoLatentPreview:
             "required": {
                 "samples": ("LATENT",),
                  "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
-                 "min_val": ("FLOAT", {"default": -0.15, "min": -1.0, "max": 0.0, "step": 0.0001}),
-                 "max_val": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 1.0, "step": 0.0001}),
-                 "r_bias": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.0001}),
-                 "g_bias": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.0001}),
-                 "b_bias": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.0001}),
+                 "min_val": ("FLOAT", {"default": -0.15, "min": -1.0, "max": 0.0, "step": 0.001}),
+                 "max_val": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 1.0, "step": 0.001}),
+                 "r_bias": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.001}),
+                 "g_bias": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.001}),
+                 "b_bias": ("FLOAT", {"default": 0.0, "min": -1.0, "max": 1.0, "step": 0.001}),
             },
         }
 
@@ -1013,38 +969,34 @@ class WanVideoLatentPreview:
         latents = samples["samples"].clone()
         print("in sample", latents.shape)
         #latent_rgb_factors =[[-0.02531045419704009, -0.00504800612542497, 0.13293717293982546], [-0.03421835830845858, 0.13996708548892614, -0.07081038680118075], [0.011091819063647063, -0.03372949685846012, -0.0698232210116172], [-0.06276524604742019, -0.09322986677909442, 0.01826383612148913], [0.021290659938126788, -0.07719530444034409, -0.08247812477766273], [0.04401102991215147, -0.0026401932105894754, -0.01410913586718443], [0.08979717602613707, 0.05361221258740831, 0.11501425309699129], [0.04695121980405198, -0.13053491609675175, 0.05025986885867986], [-0.09704684176098193, 0.03397687417738002, -0.1105886644677771], [0.14694697234804935, -0.12316902186157716, 0.04210404546699645], [0.14432470831243552, -0.002580008133591355, -0.08490676947390643], [0.051502750076553944, -0.10071695490292451, -0.01786223610178095], [-0.12503276881774464, 0.08877830923879379, 0.1076584501927316], [-0.020191205513213406, -0.1493425056303128, -0.14289740371758308], [-0.06470138952271293, -0.07410426095060325, 0.00980804676890873], [0.11747671720735695, 0.10916082743849789, -0.12235599365235904]]
-        latent_rgb_factors = [
-        [0.000159, -0.000223, 0.001299],
-        [0.000566, 0.000786, 0.001948],
-        [0.001531, -0.000337, 0.000863],
-        [0.001887, 0.002190, 0.002117],
-        [0.002032, 0.000782, -0.000512],
-        [0.001634, 0.001260, 0.001685],
-        [0.001360, -0.000292, 0.000189],
-        [0.001410, 0.000769, 0.001935],
-        [-0.000365, 0.000211, 0.000397],
-        [-0.000091, 0.001333, 0.001812],
-        [0.000201, 0.001866, 0.000546],
-        [0.001889, 0.000544, -0.000237],
-        [0.001779, 0.000022, 0.001764],
-        [0.001456, 0.000431, 0.001574],
-        [0.001791, 0.001738, -0.000121],
-        [-0.000034, -0.000405, 0.000708]
-    ]
+        latent_rgb_factors = [[-0.41, -0.25, -0.26],
+                              [-0.26, -0.49, -0.24],
+                              [-0.37, -0.54, -0.3],
+                              [-0.04, -0.29, -0.29],
+                              [-0.52, -0.59, -0.39],
+                              [-0.56, -0.6, -0.02],
+                              [-0.53, -0.06, -0.48],
+                              [-0.51, -0.28, -0.18],
+                              [-0.59, -0.1, -0.33],
+                              [-0.56, -0.54, -0.41],
+                              [-0.61, -0.19, -0.5],
+                              [-0.05, -0.25, -0.17],
+                              [-0.23, -0.04, -0.22],
+                              [-0.51, -0.56, -0.43],
+                              [-0.13, -0.4, -0.05],
+                              [-0.01, -0.01, -0.48]]
 
         import random
         random.seed(seed)
         #latent_rgb_factors = [[random.uniform(min_val, max_val) for _ in range(3)] for _ in range(16)]
-        #latent_rgb_factors = [[0.1 for _ in range(3)] for _ in range(16)]
         out_factors = latent_rgb_factors
         print(latent_rgb_factors)
 
-        latent_rgb_factors_bias = [-0.0011, 0.0, -0.0002]
-        #latent_rgb_factors_bias = [r_bias, g_bias, b_bias]
+        #latent_rgb_factors_bias = [0.138, 0.025, -0.299]
+        latent_rgb_factors_bias = [r_bias, g_bias, b_bias]
 
         latent_rgb_factors = torch.tensor(latent_rgb_factors, device=latents.device, dtype=latents.dtype).transpose(0, 1)
         latent_rgb_factors_bias = torch.tensor(latent_rgb_factors_bias, device=latents.device, dtype=latents.dtype)
-        print(latent_rgb_factors)
 
         print("latent_rgb_factors", latent_rgb_factors.shape)
 
