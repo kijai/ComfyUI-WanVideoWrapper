@@ -19,7 +19,7 @@ Transformer to `ComfyUI/models/diffusion_models`
 
 Vae to `ComfyUI/models/vae`
 
-Right now I have only ran the I2V model succesfully.
+Right now I have only ran the I2V model successfully.
 
 This test was 512x512x81
 
