@@ -30,7 +30,7 @@ def add_noise_to_reference_video(image, ratio=None):
         sigma = torch.exp(sigma).to(image.dtype)
     else:
         sigma = torch.ones((image.shape[0],)).to(image.device, image.dtype) * ratio
-    
+
     image_noise = torch.randn_like(image) * sigma[:, None, None, None, None]
     image_noise = torch.where(image==-1, torch.zeros_like(image), image_noise)
     image = image + image_noise
@@ -52,7 +52,7 @@ class WanVideoBlockSwap:
 
     def setargs(self, **kwargs):
         return (kwargs, )
-    
+
 # class WanVideoEnhanceAVideo:
 #     @classmethod
 #     def INPUT_TYPES(s):
@@ -145,6 +145,7 @@ class WanVideoModelLoader:
                     ], {"default": "sdpa"}),
                 "compile_args": ("WANCOMPILEARGS", ),
                 "block_swap_args": ("BLOCKSWAPARGS", ),
+                "lora": ("WANVIDLORA", {"default": None}),
             }
         }
 
@@ -154,7 +155,7 @@ class WanVideoModelLoader:
     CATEGORY = "WanVideoWrapper"
 
     def loadmodel(self, model, base_precision, load_device,  quantization,
-                  compile_args=None, attention_mode="sdpa", block_swap_args=None):
+                  compile_args=None, attention_mode="sdpa", block_swap_args=None, lora=None):
         transformer = None
         mm.unload_all_models()
         mm.soft_empty_cache()
@@ -169,12 +170,12 @@ class WanVideoModelLoader:
         offload_device = mm.unet_offload_device()
         manual_offloading = True
         transformer_load_device = device if load_device == "main_device" else offload_device
-        
+
         base_dtype = {"fp8_e4m3fn": torch.float8_e4m3fn, "fp8_e4m3fn_fast": torch.float8_e4m3fn, "bf16": torch.bfloat16, "fp16": torch.float16, "fp32": torch.float32}[base_precision]
 
         model_path = folder_paths.get_full_path_or_raise("diffusion_models", model)
         sd = load_torch_file(model_path, device=transformer_load_device, safe_load=True)
-        
+
         dim = sd["patch_embedding.weight"].shape[0]
         in_channels = sd["patch_embedding.weight"].shape[1]
         print("in_channels: ", in_channels)
@@ -209,8 +210,8 @@ class WanVideoModelLoader:
             WanVideoModelConfig(base_dtype),
             model_type=comfy.model_base.ModelType.FLOW,
             device=device,
-        )        
-          
+        )
+
 
         if not "torchao" in quantization:
             log.info("Using accelerate to load and assign model weights to device...")
@@ -233,6 +234,21 @@ class WanVideoModelLoader:
             del sd
             gc.collect()
             mm.soft_empty_cache()
+
+            if lora is not None:
+                from comfy.sd import load_lora_for_models
+                for l in lora:
+                    log.info(f"Loading LoRA: {l['name']} with strength: {l['strength']}")
+                    lora_path = l["path"]
+                    lora_strength = l["strength"]
+                    lora_sd = load_torch_file(lora_path, safe_load=True)
+
+                    # for k in lora_sd.keys():
+                    #   print(k)
+
+                    patcher, _ = load_lora_for_models(patcher, None, lora_sd, lora_strength, 0)
+
+            comfy.model_management.load_models_gpu([patcher])
 
             if load_device == "offload_device":
                 patcher.model.diffusion_model.to(offload_device)
@@ -286,6 +302,21 @@ class WanVideoModelLoader:
             comfy_model.diffusion_model = transformer
             patcher = comfy.model_patcher.ModelPatcher(comfy_model, device, offload_device)
 
+            if lora is not None:
+                from comfy.sd import load_lora_for_models
+                for l in lora:
+                    log.info(f"Loading LoRA: {l['name']} with strength: {l['strength']}")
+                    lora_path = l["path"]
+                    lora_strength = l["strength"]
+                    lora_sd = load_torch_file(lora_path, safe_load=True)
+
+                    #for k in lora_sd.keys():
+                    #   print(k)
+
+                    patcher, _ = load_lora_for_models(patcher, None, lora_sd, lora_strength, 0)
+
+            comfy.model_management.load_models_gpu([patcher])
+
             for i, block in enumerate(patcher.model.diffusion_model.blocks):
                 log.info(f"Quantizing block {i}")
                 for name, _ in block.named_parameters(prefix=f"blocks.{i}"):
@@ -318,7 +349,7 @@ class WanVideoModelLoader:
 
         for model in mm.current_loaded_models:
             if model._model() == patcher:
-                mm.current_loaded_models.remove(model)            
+                mm.current_loaded_models.remove(model)
 
         return (patcher,)
 
@@ -359,12 +390,12 @@ class WanVideoVAELoader:
         has_model_prefix = any(k.startswith("model.") for k in vae_sd.keys())
         if not has_model_prefix:
             vae_sd = {f"model.{k}": v for k, v in vae_sd.items()}
-        
+
         vae = WanVideoVAE(dtype=dtype)
         vae.load_state_dict(vae_sd)
         vae.eval()
         vae.to(device = offload_device, dtype = dtype)
-            
+
 
         return (vae,)
 
@@ -427,7 +458,7 @@ class LoadWanVideoT5TextEncoder:
     DESCRIPTION = "Loads Hunyuan text_encoder model from 'ComfyUI/models/LLM'"
 
     def loadmodel(self, model_name, precision, load_device="offload_device"):
-       
+
         device = mm.get_torch_device()
         offload_device = mm.unet_offload_device()
 
@@ -447,9 +478,9 @@ class LoadWanVideoT5TextEncoder:
             state_dict=sd,
             tokenizer_path=tokenizer_path,
         )
-        
+
         return (T5_text_encoder,)
-    
+
 class LoadWanVideoClipTextEncoder:
     @classmethod
     def INPUT_TYPES(s):
@@ -472,7 +503,7 @@ class LoadWanVideoClipTextEncoder:
     DESCRIPTION = "Loads Hunyuan text_encoder model from 'ComfyUI/models/LLM'"
 
     def loadmodel(self, model_name, precision, load_device="offload_device"):
-       
+
         device = mm.get_torch_device()
         offload_device = mm.unet_offload_device()
 
@@ -486,7 +517,7 @@ class LoadWanVideoClipTextEncoder:
         sd = load_torch_file(model_path, safe_load=True)
 
         clip_model = CLIPModel(dtype=dtype, device=text_encoder_load_device, state_dict=sd, tokenizer_path=tokenizer_path)
-        
+
         return (clip_model,)
 
 class WanVideoTextEncode:
@@ -513,7 +544,7 @@ class WanVideoTextEncode:
         offload_device = mm.unet_offload_device()
 
         t5.model.to(device)
-       
+
         context = t5([positive_prompt], device)
         context_null = t5([negative_prompt], device)
         context = [t.to(device) for t in context]
@@ -528,7 +559,7 @@ class WanVideoTextEncode:
                 "negative_prompt_embeds": context_null,
             }
         return (prompt_embeds_dict,)
-    
+
 #region clip image encode
 class WanVideoImageClipEncode:
     @classmethod
@@ -620,14 +651,14 @@ class WanVideoImageClipEncode:
         }
 
         return (image_embeds,)
-    
+
 class WanVideoEmptyEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
             "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Width of the image to encode"}),
             "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Height of the image to encode"}),
-            "num_frames": ("INT", {"default": 81, "min": 5, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
             },
         }
 
@@ -648,13 +679,13 @@ class WanVideoEmptyEmbeds:
         seq_len = math.ceil((target_shape[2] * target_shape[3]) /
                             (patch_size[1] * patch_size[2]) *
                             target_shape[1])
-        
+
         embeds = {
             "max_seq_len": seq_len,
             "target_shape": target_shape,
             "num_frames": num_frames
         }
-    
+
         return (embeds,)
 
 
@@ -684,7 +715,7 @@ class WanVideoSampler:
                 "samples": ("LATENT", {"tooltip": "init Latents to use for video2video process"} ),
                 #"image_cond_latents": ("LATENT", {"tooltip": "init Latents to use for image2video process"} ),
                 "denoise_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                
+
                 #"riflex_freq_index": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1, "tooltip": "Frequency index for RIFLEX, disabled when 0, default 4. Allows for new frames to be generated after 129 without looping"}),
             }
         }
@@ -746,7 +777,7 @@ class WanVideoSampler:
 
         #for name, param in transformer.named_parameters():
         #    print(name, param.data.device)
-        
+
         steps = int(steps/denoise_strength)
 
         if scheduler == 'unipc':
@@ -774,11 +805,11 @@ class WanVideoSampler:
                 sigmas=sampling_sigmas)
         else:
             raise NotImplementedError("Unsupported solver.")
-        
+
         if denoise_strength < 1.0:
             steps = int(steps * denoise_strength)
-            timesteps = timesteps[-(steps + 1):]        
-        
+            timesteps = timesteps[-(steps + 1):]
+
         seed_g = torch.Generator(device=torch.device("cpu"))
         seed_g.manual_seed(seed)
         if transformer.model_type == "i2v":
@@ -806,7 +837,7 @@ class WanVideoSampler:
         if samples is not None:
             latent_timestep = timesteps[:1].to(noise)
             noise = noise * latent_timestep / 1000 + (1 - latent_timestep / 1000) * samples["samples"].squeeze(0).to(noise)
-            
+
         latent = noise.to(device)
 
         d = transformer.dim // transformer.num_heads
@@ -837,7 +868,7 @@ class WanVideoSampler:
 
         arg_null = base_args.copy()
         arg_null.update({'context': text_embeds["negative_prompt_embeds"]})
-        
+
         pbar = ProgressBar(steps)
 
         from latent_preview import prepare_callback
@@ -855,14 +886,14 @@ class WanVideoSampler:
                 if cfg[i] != 1.0:
                     noise_pred_uncond = transformer(
                         latent_model_input, t=timestep, **arg_null)[0].to(offload_device)
-                
+
                     noise_pred = noise_pred_uncond + cfg[i] * (
                         noise_pred_cond - noise_pred_uncond)
                 else:
                     noise_pred = noise_pred_cond
-                
+
                 latent = latent.to(offload_device)
-                
+
                 temp_x0 = sample_scheduler.step(
                     noise_pred.unsqueeze(0),
                     t,
@@ -872,7 +903,7 @@ class WanVideoSampler:
                 latent = temp_x0.squeeze(0)
 
                 x0 = [latent.to(device)]
-                
+
                 if callback is not None:
                     callback_latent = (latent_model_input[0].cpu() - noise_pred * t.cpu() / 1000).detach().permute(1,0,2,3)
                     callback(i, callback_latent, None, steps)
@@ -972,7 +1003,7 @@ class WanVideoEncode:
         image = (image.clone() * 2.0 - 1.0).to(vae.dtype).to(device).unsqueeze(0).permute(0, 4, 1, 2, 3) # B, C, T, H, W
         if noise_aug_strength > 0.0:
             image = add_noise_to_reference_video(image, ratio=noise_aug_strength)
-        
+
         latents = vae.encode(image, device=device, tiled=enable_vae_tiling, tile_size=(tile_x, tile_y), tile_stride=(tile_stride_x, tile_stride_y))#.latent_dist.sample(generator)
         if latent_strength != 1.0:
             latents *= latent_strength
@@ -1063,6 +1094,45 @@ class WanVideoLatentPreview:
 
         return (latent_images.float().cpu(), out_factors)
 
+
+class WanVideoLoraSelect:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+               "lora": (folder_paths.get_filename_list("loras"),
+                {"tooltip": "LORA models are expected to be in ComfyUI/models/loras with .safetensors extension"}),
+                "strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.0001, "tooltip": "LORA strength, set to 0.0 to unmerge the LORA"}),
+            },
+            "optional": {
+                "prev_lora":("WANVIDLORA", {"default": None, "tooltip": "For loading multiple LoRAs"}),
+                "blocks":("SELECTEDBLOCKS", ),
+            }
+        }
+
+    RETURN_TYPES = ("WANVIDLORA",)
+    RETURN_NAMES = ("lora", )
+    FUNCTION = "getlorapath"
+    CATEGORY = "WanVideoWrapper"
+    DESCRIPTION = "Select a LoRA model from ComfyUI/models/loras"
+
+    def getlorapath(self, lora, strength, blocks=None, prev_lora=None, fuse_lora=False):
+        loras_list = []
+
+        lora = {
+            "path": folder_paths.get_full_path("loras", lora),
+            "strength": strength,
+            "name": lora.split(".")[0],
+            "fuse_lora": fuse_lora,
+            "blocks": blocks
+        }
+        if prev_lora is not None:
+            loras_list.extend(prev_lora)
+
+        loras_list.append(lora)
+        return (loras_list,)
+
+
 NODE_CLASS_MAPPINGS = {
     "WanVideoSampler": WanVideoSampler,
     "WanVideoDecode": WanVideoDecode,
@@ -1077,6 +1147,7 @@ NODE_CLASS_MAPPINGS = {
     "WanVideoTorchCompileSettings": WanVideoTorchCompileSettings,
     "WanVideoLatentPreview": WanVideoLatentPreview,
     "WanVideoEmptyEmbeds": WanVideoEmptyEmbeds,
+    "WanVideoLoraSelect": WanVideoLoraSelect,
     }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoSampler": "WanVideo Sampler",
@@ -1093,4 +1164,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoTorchCompileSettings": "WanVideo Torch Compile Settings",
     "WanVideoLatentPreview": "WanVideo Latent Preview",
     "WanVideoEmptyEmbeds": "WanVideo Empty Embeds",
+    "WanVideoLoraSelect": "WanVideo Lora Select",
     }
