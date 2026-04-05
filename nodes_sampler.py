@@ -2369,15 +2369,17 @@ class WanVideoSampler:
                                         transition_start = 0 
                                         msk[:, transition_start:transition_start+transition_len] = transition_mask_values.to(device).view(1, -1, 1, 1)
                                     
-                                    # 5. Handle shape mismatch
-                                    if temporal_ref_latents is not None and msk.shape[1] != temporal_ref_latents.shape[1]:
-                                        if temporal_ref_latents.shape[1] < msk.shape[1]:
-                                            pad_len = msk.shape[1] - temporal_ref_latents.shape[1]
-                                            pad_tensor = temporal_ref_latents[:, -1:].repeat(1, pad_len, 1, 1)
-                                            temporal_ref_latents = torch.cat([temporal_ref_latents, pad_tensor], dim=1)
-                                        else:
-                                            temporal_ref_latents = temporal_ref_latents[:, :msk.shape[1]]
-
+                                # [FIX] Unified shape alignment for temporal_ref_latents and msk
+                                # Handles VAE time downsampling offset: (T-1)//4 + 1 vs latent_window_size
+                                # Moved outside branches to ensure execution for both transition and non-transition modes
+                                if temporal_ref_latents is not None and msk.shape[1] != temporal_ref_latents.shape[1]:
+                                    if temporal_ref_latents.shape[1] < msk.shape[1]:
+                                        pad_len = msk.shape[1] - temporal_ref_latents.shape[1]
+                                        pad_tensor = temporal_ref_latents[:, -1:].repeat(1, pad_len, 1, 1)
+                                        temporal_ref_latents = torch.cat([temporal_ref_latents, pad_tensor], dim=1)
+                                    else:
+                                        temporal_ref_latents = temporal_ref_latents[:, :msk.shape[1]]
+                                        
                                 if ref_latent is not None:
                                     temporal_ref_latents = torch.cat([msk, temporal_ref_latents], dim=0) # 4+C T H W
                                     image_cond_in = torch.cat([ref_latent.to(device), temporal_ref_latents], dim=1) # 4+C T+trefs H W
