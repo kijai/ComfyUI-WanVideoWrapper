@@ -1380,13 +1380,15 @@ class WanVideoAnimateEmbeds:
                     repeat_factor = math.ceil(expected_input_frames / b)
                     transition_video = transition_video.repeat(repeat_factor, 1, 1, 1)[:expected_input_frames]
             
-            b = transition_video.shape[0]  # It's 32 now
+            b, h, w, c = transition_video.shape  # It should be 32 now
             
-            # Adjust spatial dimensions to target WxH
+            # Adjust spatial dimensions to target WxH.
+            # Keep the same semantic flow as the matched-size path:
+            # BHWC -> (optional resize in BCHW) -> BHWC -> CTHW -> normalize -> encode
             if h != H or w != W:
-                transition_video = transition_video.reshape(-1, h, w, c)
-                transition_video = common_upscale(transition_video.movedim(-1, 1), W, H, "lanczos", "disabled").movedim(0, 1)
-                transition_video = transition_video.reshape(b, c, H, W).permute(0, 2, 3, 1)  # [B, H, W, C]
+                transition_video = common_upscale(
+                    transition_video.movedim(-1, 1), W, H, "lanczos", "disabled"
+                ).movedim(1, -1)
             
             # Normalize to [-1, 1]
             transition_video = transition_video.permute(3, 0, 1, 2)  # [C, T, H, W]
