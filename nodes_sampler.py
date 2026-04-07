@@ -2379,7 +2379,7 @@ class WanVideoSampler:
                                         temporal_ref_latents = torch.cat([temporal_ref_latents, pad_tensor], dim=1)
                                     else:
                                         temporal_ref_latents = temporal_ref_latents[:, :msk.shape[1]]
-                                        
+
                                 if ref_latent is not None:
                                     temporal_ref_latents = torch.cat([msk, temporal_ref_latents], dim=0) # 4+C T H W
                                     image_cond_in = torch.cat([ref_latent.to(device), temporal_ref_latents], dim=1) # 4+C T+trefs H W
