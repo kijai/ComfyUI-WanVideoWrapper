@@ -2063,10 +2063,15 @@ class WanVideoSampler:
                             orig_model_input_frames = partial_latent_model_input.shape[1]
 
                             # ============ Replace msk placeholder channels ============
-                            # image_cond structure: [image_cond_mask (4) + image_embeds (32)] = 36 channels
-                            # Replace the first 4 channels of image_cond_mask with window_msk
-                            image_cond_in = partial_img_emb.clone()
-                            image_cond_in[:4] = window_msk  # Replace the first 4 channels
+                            # image_cond is optional in this path. Only build image_cond_in
+                            # when partial_img_emb is available.
+                            if partial_img_emb is not None:
+                                # image_cond structure: [image_cond_mask (4) + image_embeds (32)] = 36 channels
+                                # Replace the first 4 channels of image_cond_mask with window_msk
+                                image_cond_in = partial_img_emb.clone()
+                                image_cond_in[:4] = window_msk  # Replace the first 4 channels
+                            else:
+                                image_cond_in = None
                             # ========================================
                             noise_pred_context, _, new_teacache = predict_with_cfg(
                                 partial_latent_model_input,
