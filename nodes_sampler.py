@@ -2753,6 +2753,28 @@ class WanVideoScheduler:
     CATEGORY = "WanVideoWrapper"
     EXPERIMENTAL = True
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, steps, start_step, end_step, **kwargs):
+        # Run at prompt-queue time, before any node executes — this prevents
+        # an upstream sampler from loading the model and burning GPU time on
+        # work that a downstream sampler with an empty timestep slice will
+        # then crash on (UnboundLocalError: 'callback_latent' / 'noise_pred').
+        if start_step >= steps:
+            return (
+                f"start_step ({start_step}) must be < steps ({steps}); "
+                f"the requested range would produce an empty timestep slice "
+                f"and the sampler would crash mid-graph."
+            )
+        if end_step != -1:
+            if end_step > steps:
+                return f"end_step ({end_step}) must be <= steps ({steps})."
+            if end_step <= start_step:
+                return (
+                    f"end_step ({end_step}) must be > start_step ({start_step}); "
+                    f"the requested range would produce an empty timestep slice."
+                )
+        return True
+
     def process(self, scheduler, steps, start_step, end_step, shift, unique_id, sigmas=None, enhance_hf=False):
         sample_scheduler, timesteps, start_idx, end_idx = get_scheduler(
             scheduler, steps, start_step, end_step, shift, device, sigmas=sigmas, log_timesteps=True, enhance_hf=enhance_hf)

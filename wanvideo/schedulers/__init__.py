@@ -174,8 +174,22 @@ def get_scheduler(scheduler, steps, start_step, end_step, shift, device, transfo
         sample_scheduler.sigmas = torch.cat([timesteps / 1000, torch.zeros(1, device=timesteps.device)])
 
     steps = len(timesteps)
+    # Reject ranges that produce an empty timestep slice — otherwise the
+    # sampler's main loop never executes and downstream code (e.g. callbacks
+    # referenced after the loop) crashes with a confusing UnboundLocalError.
+    if isinstance(start_step, int) and start_step >= steps:
+        raise ValueError(
+            f"start_step ({start_step}) must be < steps ({steps}); "
+            f"the requested range would produce an empty timestep slice"
+        )
+    if isinstance(end_step, int) and end_step != -1 and end_step > steps:
+        raise ValueError(
+            f"end_step ({end_step}) must be <= steps ({steps})"
+        )
     if (isinstance(start_step, int) and end_step != -1 and start_step >= end_step) or (not isinstance(start_step, int) and start_step != -1 and end_step >= start_step):
-        raise ValueError("start_step must be less than end_step")
+        raise ValueError(
+            f"start_step ({start_step}) must be less than end_step ({end_step})"
+        )
 
     # Determine start and end indices for slicing
     start_idx = 0
