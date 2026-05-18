@@ -488,6 +488,9 @@ class WanVideoSampler:
             if transition_mask_values is not None:
                 log.info(f"Linear decay mask values: {transition_mask_values.tolist()}")
         # ================================================================
+        has_prefix = image_embeds.get("has_prefix", False)
+        if has_prefix:
+            log.info("Prefix frames: detected, will prepend indices 0-5 to each window (except first)")
         if wananimate_loop and context_options is not None:
             raise Exception("context_options are not compatible or necessary with WanAnim looping, since it creates the video in a loop.")
         wananim_pose_latents = image_embeds.get("pose_latents", None)
@@ -640,6 +643,7 @@ class WanVideoSampler:
                     seq_len = (context_frames * 2 + 1 + mocha_num_refs) * (noise.shape[2] * noise.shape[3] // 4)
                 else:
                     seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * context_frames)
+                base_patches_per_frame = math.ceil((noise.shape[2] * noise.shape[3]) / 4)
                 log.info(f"context window seq len: {seq_len}")
 
                 if context_options["freenoise"]:
@@ -1905,46 +1909,51 @@ class WanVideoSampler:
                                 window_frames = len(c)
                                 window_msk = partial_img_emb[:4].clone()
                                 # ========================================
-                                
+
                                 # ============ Transition replacement (1st window only) ============
-                                if has_transition and c[0] == 0:
-                                    # image_cond contains [ref_latent (4 channels) + target_latent (16 channels)]
-                                    # Need to skip the first 4 ref_latent channels, replacing only the target_latent part
-                                    # image_cond structure: [image_cond_mask (4) + image_embeds (32)]
-                                    # transition_latent (16 channels) replaces the first 8 frames of image_embeds (16 channels)
+                                if has_transition and c[0] == 0 and not has_prefix:
                                     partial_img_emb[4:20, 1:1+transition_len] = transition_latent.to(device, dtype=transition_latent.dtype)
                                     log.info(f"Replaced first {transition_len} latent frames with transition_video (context_options mode)")
                                 # ============================================================
 
-                                
                                 # ============ Set transition mask ============
-                                if has_transition and c[0] == 0:
+                                if has_transition and c[0] == 0 and not has_prefix:
                                     window_trans_start = 1
                                     window_trans_end = 1 + transition_len
-                                    
                                     if window_trans_start < window_trans_end:
                                         mask_slice = transition_mask_values[0:transition_len]
                                         window_msk[:, window_trans_start:window_trans_end] = mask_slice.view(1, -1, 1, 1)
                                 # ================================================================
-                                if c[0] != 0 and context_reference_latent is not None:
-                                    if context_reference_latent.shape[0] == 1: #only single extra init latent
-                                        new_init_image = context_reference_latent[0, :, 0].to(device)
-                                        # Concatenate the first 4 channels of partial_img_emb with new_init_image to match the required shape
-                                        partial_img_emb[:, 0] = torch.cat([image_cond[:4, 0].to(device), new_init_image], dim=0)
+
+                                # ============ Prefix: prepend indices 0-5 to non-first windows ============
+                                if has_prefix and c[0] != 0:
+                                    prefix_ctx = image_cond[:, :6].to(device, dtype)
+                                    partial_img_emb = torch.cat([prefix_ctx, partial_img_emb], dim=1)
+                                    prefix_msk = image_cond[:4, :6].to(device, dtype)
+                                    window_msk = torch.cat([prefix_msk, window_msk], dim=1)
+                                # ======================================================================
+
+                                # ============ ref_latent replacement (skip when prefix active) ============
+                                if not has_prefix:
+                                    if c[0] != 0 and context_reference_latent is not None:
+                                        if context_reference_latent.shape[0] == 1:
+                                            new_init_image = context_reference_latent[0, :, 0].to(device)
+                                            partial_img_emb[:, 0] = torch.cat([image_cond[:4, 0].to(device), new_init_image], dim=0)
+                                            window_msk[:, 0] = image_cond[:4, 0].to(device)
+                                        elif context_reference_latent.shape[0] > 1:
+                                            num_extra_inits = context_reference_latent.shape[0]
+                                            section_size = (latent_video_length / num_extra_inits)
+                                            extra_init_index = min(int(max(c) / section_size), num_extra_inits - 1)
+                                            if context_options["verbose"]:
+                                                log.info(f"extra init image index: {extra_init_index}")
+                                            new_init_image = context_reference_latent[extra_init_index, :, 0].to(device)
+                                            partial_img_emb[:, 0] = torch.cat([image_cond[:4, 0].to(device), new_init_image], dim=0)
+                                            window_msk[:, 0] = image_cond[:4, 0].to(device)
+                                    else:
+                                        new_init_image = image_cond[:, 0].to(device)
+                                        partial_img_emb[:, 0] = new_init_image
                                         window_msk[:, 0] = image_cond[:4, 0].to(device)
-                                    elif context_reference_latent.shape[0] > 1:
-                                        num_extra_inits = context_reference_latent.shape[0]
-                                        section_size = (latent_video_length / num_extra_inits)
-                                        extra_init_index = min(int(max(c) / section_size), num_extra_inits - 1)
-                                        if context_options["verbose"]:
-                                            log.info(f"extra init image index: {extra_init_index}")
-                                        new_init_image = context_reference_latent[extra_init_index, :, 0].to(device)
-                                        partial_img_emb[:, 0] = torch.cat([image_cond[:4, 0].to(device), new_init_image], dim=0)
-                                        window_msk[:, 0] = image_cond[:4, 0].to(device)
-                                else:
-                                    new_init_image = image_cond[:, 0].to(device)
-                                    partial_img_emb[:, 0] = new_init_image
-                                    window_msk[:, 0] = image_cond[:4, 0].to(device)
+                                # ==========================================================================
 
                                 if control_latents is not None:
                                     partial_control_latents = control_latents[:, c]
@@ -1995,6 +2004,12 @@ class WanVideoSampler:
                             if latents_to_insert is not None and c[0] != 0:
                                 partial_latent_model_input[:, :1] = latents_to_insert
 
+                            # ============ Prefix: prepend noise for indices 0-5 ============
+                            if has_prefix and c[0] != 0:
+                                prefix_noise = latent_model_input[:, :6].to(device)
+                                partial_latent_model_input = torch.cat([prefix_noise, partial_latent_model_input], dim=1)
+                            # =============================================================
+
                             partial_unianim_data = None
                             if unianim_data is not None:
                                 partial_dwpose = dwpose_data[:, :, c]
@@ -2043,7 +2058,18 @@ class WanVideoSampler:
                                 end = c[-1]
                                 center_indices = torch.arange(start, end, 1)
                                 center_indices = torch.clamp(center_indices, min=0, max=wananim_pose_latents.shape[2] - 1)
-                                partial_wananim_pose_latents = wananim_pose_latents[:, :, center_indices][:, :, :context_frames-1].to(device, dtype)
+                                pose_limit = context_frames - 1
+                                partial_wananim_pose_latents = wananim_pose_latents[:, :, center_indices][:, :, :pose_limit].to(device, dtype)
+
+                            # ============ Prefix: prepend face/pose for indices 0-5 ============
+                            if has_prefix and c[0] != 0:
+                                if partial_wananim_face_pixels is not None:
+                                    prefix_face = wananim_face_pixels[:, :, :24].to(device, dtype)
+                                    partial_wananim_face_pixels = torch.cat([prefix_face, partial_wananim_face_pixels], dim=2)
+                                if partial_wananim_pose_latents is not None:
+                                    prefix_pose = wananim_pose_latents[:, :, :6].to(device, dtype)
+                                    partial_wananim_pose_latents = torch.cat([prefix_pose, partial_wananim_pose_latents], dim=2)
+                            # ================================================================
 
                             partial_flashvsr_LQ_latent = None
                             if LQ_images is not None:
@@ -2073,6 +2099,9 @@ class WanVideoSampler:
                             else:
                                 image_cond_in = None
                             # ========================================
+                            original_seq_len = seq_len
+                            if has_prefix and c[0] != 0:
+                                seq_len = original_seq_len + 6 * base_patches_per_frame
                             noise_pred_context, _, new_teacache = predict_with_cfg(
                                 partial_latent_model_input,
                                 cfg[idx], positive,
@@ -2083,6 +2112,13 @@ class WanVideoSampler:
                                 humo_image_cond=humo_image_cond, humo_image_cond_neg=humo_image_cond_neg, humo_audio=humo_audio, humo_audio_neg=humo_audio_neg,
                                 wananim_face_pixels=partial_wananim_face_pixels, wananim_pose_latents=partial_wananim_pose_latents, multitalk_audio_embeds=multitalk_audio_embeds,
                                 uni3c_data=uni3c_data, flashvsr_LQ_latent=partial_flashvsr_LQ_latent)
+
+                            seq_len = original_seq_len  # restore seq_len
+
+                            # ============ Prefix: slice off prepended predictions ============
+                            if has_prefix and c[0] != 0:
+                                noise_pred_context = noise_pred_context[:, 6:]
+                            # ==============================================================
 
                             if cache_args is not None:
                                 self.window_tracker.cache_states[window_id] = new_teacache
@@ -2728,6 +2764,7 @@ class WanVideoSampler:
             "looped": is_looped,
             "end_image": end_image if not fun_or_fl2v_model else None,
             "has_ref": has_ref,
+            "has_prefix": has_prefix,
             "drop_last": drop_last,
             "generator_state": seed_g.get_state(),
             "original_image": original_image.cpu() if original_image is not None else None,
