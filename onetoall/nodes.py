@@ -9,15 +9,15 @@ class WanVideoAddOneToAllReferenceEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "vae": ("WANVAE", {"tooltip": "VAE model"}),
-                    "ref_image": ("IMAGE",),
-                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Strength of the reference embedding"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Base image embeds to extend with the OneToAll reference latent — connect from a WanVideo*Embeds producer"}),
+                    "vae": ("WANVAE", {"tooltip": "Wan VAE used to encode the reference image (and mask) into a latent — connect from WanVideoVAELoader"}),
+                    "ref_image": ("IMAGE", {"tooltip": "Single reference appearance image to encode and inject as the OneToAll identity/style cue"}),
+                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Multiplier on the OneToAll reference latent injected into the diffusion conditioning; 0 disables the reference"}),
                     "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percentage of the embedding application"}),
                     "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percentage of the embedding application"}),
                 },
                 "optional": {
-                    "ref_mask": ("MASK",),
+                    "ref_mask": ("MASK", {"tooltip": "Optional mask over the reference image marking the region to keep; encoded alongside the reference for masked identity transfer"}),
                 }
         }
 
@@ -60,14 +60,14 @@ class WanVideoAddOneToAllPoseEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "pose_images": ("IMAGE", {"tooltip": "Pose images for the entire video"}),
-                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Strength of the pose control"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Base image embeds to extend with OneToAll pose-controlnet conditioning — connect from a WanVideo*Embeds producer"}),
+                    "pose_images": ("IMAGE", {"tooltip": "Per-frame pose-stick images covering the full output video; used as the OneToAll pose controlnet driving signal"}),
+                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Multiplier on the OneToAll pose controlnet feature injected into the diffusion conditioning; 0 disables pose control"}),
                     "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percentage of the pose control application"}),
                     "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percentage of the pose control application"}),
                 },
                 "optional": {
-                    "pose_prefix_image": ("IMAGE",),
+                    "pose_prefix_image": ("IMAGE", {"tooltip": "Optional single image used as the pose-conditioning prefix frame; defaults to the first frame of pose_images when omitted"}),
                     "pose_cfg_scale": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "CFG scale for the pose control, has no effect if main cfg scale is 1.0"}),
                 }
         }
@@ -98,15 +98,15 @@ class WanVideoAddOneToAllExtendEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Base image embeds to extend for OneToAll long-video continuation — connect from a WanVideo*Embeds producer"}),
                     "prev_latents": ("LATENT", {"tooltip": "Previous latents to be used to continue generation"}),
-                    "window_size": ("INT", {"default": 81, "min": 1, "max": 256, "step": 1, "tooltip": "Number of new frames to generate" }),
+                    "window_size": ("INT", {"default": 81, "min": 1, "max": 256, "step": 1, "tooltip": "Total number of frames in this extension window (including overlap with previous segment); the wrapper slices pose_images[frames_processed-overlap : frames_processed-overlap+window_size]" }),
                     "overlap": ("INT", {"default": 5, "min": 0, "max": 64, "step": 1, "tooltip": "Number of overlapping frames between previous and new frames" }),
                     "frames_processed": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1, "tooltip": "Number of frames already processed in the video" }),
                     "if_not_enough_frames": (["pad_with_last", "error"], {"default": "pad_with_last", "tooltip": "What to do if there are not enough frames in pose_images for the window"}),
                 },
                 "optional": {
-                    "pose_images": ("IMAGE", {"tooltip": "Pose images for the entire video"}),
+                    "pose_images": ("IMAGE", {"tooltip": "Per-frame pose-stick images covering the entire video; the node slices pose_images[frames_processed-overlap : frames_processed-overlap+window_size] for this segment"}),
                 }
         }
 

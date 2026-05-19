@@ -10,9 +10,9 @@ class WanVideoAddFlashVSRInput:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "images": ("IMAGE", {"tooltip": "Low-res video frames to enhance"}),
-                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01, "tooltip": "Strength to apply the FlashVSR latent"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Base image embeds to extend with FlashVSR low-res conditioning — connect from a WanVideo*Embeds producer"}),
+                    "images": ("IMAGE", {"tooltip": "Per-frame low-quality / low-resolution source video to super-resolve; passed through FlashVSR as the LQ conditioning signal"}),
+                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 2.0, "step": 0.01, "tooltip": "Multiplier on the FlashVSR low-res conditioning latent; 1.0 = full super-resolution guidance, 0 disables it"}),
                 }
         }
 
@@ -37,7 +37,7 @@ class WanVideoFlashVSRDecoderLoader:
             },
             "optional": {
                 "precision": (["fp16", "fp32", "bf16"],
-                    {"default": "bf16"}
+                    {"default": "bf16", "tooltip": "Compute dtype the FlashVSR TCDecoder loads at; bf16 default matches the released weights"}
                 ),
             }
         }

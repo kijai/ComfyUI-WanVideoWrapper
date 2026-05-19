@@ -108,30 +108,30 @@ class WanVideoDiffusionForcingSampler:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model": ("WANVIDEOMODEL",),
-                "text_embeds": ("WANVIDEOTEXTEMBEDS", ),
-                "image_embeds": ("WANVIDIMAGE_EMBEDS", ),
+                "model": ("WANVIDEOMODEL", {"tooltip": "Loaded Wan/SkyReels diffusion model to sample from — connect from WanVideoModelLoader"}),
+                "text_embeds": ("WANVIDEOTEXTEMBEDS",  {"tooltip": "Encoded positive (+ optional negative) text prompt — connect from WanVideoTextEncode/WanVideoTextEncodeCached"}),
+                "image_embeds": ("WANVIDIMAGE_EMBEDS",  {"tooltip": "Image embeds bundle defining frame count, dimensions, and any I2V/control conditioning — connect from a WanVideo*Encode/*Embeds node"}),
                 "addnoise_condition": ("INT", {"default": 10, "min": 0, "max": 1000, "tooltip": "Improves consistency in long video generation"}),
-                "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0, "step": 0.01}),
-                "steps": ("INT", {"default": 30, "min": 1}),
-                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01}),
-                "shift": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0, "step": 0.01, "tooltip": "Target frames per second; written into the model's fps embedding when present (SkyReels variants trained at 16 fps use 0, others use 1)"}),
+                "steps": ("INT", {"default": 30, "min": 1, "tooltip": "Number of denoising steps; the diffusion-forcing scheduler builds a per-frame timestep matrix from these"}),
+                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01, "tooltip": "Classifier-free guidance scale; 1.0 disables the unconditional pass (faster, less prompt adherence)"}),
+                "shift": ("FLOAT", {"default": 8.0, "min": 0.0, "max": 1000.0, "step": 0.01, "tooltip": "Flow-matching timestep shift; higher pushes sampling toward earlier (noisier) timesteps"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "RNG seed for the initial noise tensor; identical seed + identical other settings reproduces the same output"}),
                 "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Moves the model to the offload device after sampling"}),
                 "scheduler": (["unipc", "unipc/beta", "euler", "euler/beta", "lcm", "lcm/beta"],
                     {
-                        "default": 'unipc'
+                        "default": 'unipc', "tooltip": "Sampler scheduler family; /beta variants use beta-sigma timestep spacing"
                     }),
             },
             "optional": {
                 "samples": ("LATENT", {"tooltip": "init Latents to use for video2video process"} ),
-                "prefix_samples": ("LATENT", {"tooltip": "prefix latents"} ),
-                "denoise_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "cache_args": ("CACHEARGS", ),
-                "slg_args": ("SLGARGS", ),
+                "prefix_samples": ("LATENT", {"tooltip": "Prefix latents kept un-denoised (clean) at the start of the diffusion-forcing window; used for continuing a previous clip"} ),
+                "denoise_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "v2v denoise strength; 1.0 = full re-noise, lower preserves more of the input samples"}),
+                "cache_args": ("CACHEARGS",  {"tooltip": "Cache acceleration settings (TeaCache / MagCache thresholds and step ranges) — connect from WanVideoCacheArgs"}),
+                "slg_args": ("SLGARGS",  {"tooltip": "Skip Layer Guidance settings (block list, start/end percent) — connect from WanVideoSLG"}),
                 "rope_function": (["default", "comfy"], {"default": "comfy", "tooltip": "Comfy's RoPE implementation doesn't use complex numbers and can thus be compiled, that should be a lot faster when using torch.compile"}),
-                "experimental_args": ("EXPERIMENTALARGS", ),
-                "unianimate_poses": ("UNIANIMATE_POSE", ),
+                "experimental_args": ("EXPERIMENTALARGS",  {"tooltip": "Experimental sampler toggles (cfg_zero_star, use_zero_init, FreSca, video_attention_split_steps) — connect from WanVideoExperimentalArgs"}),
+                "unianimate_poses": ("UNIANIMATE_POSE",  {"tooltip": "UniAnimate pose conditioning (DWPose + reference pose) — connect from WanVideoUniAnimatePoseInput"}),
             }
         }
 

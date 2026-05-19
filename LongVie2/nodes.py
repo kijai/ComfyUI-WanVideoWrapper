@@ -9,15 +9,15 @@ class WanVideoAddDualControlEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "vae": ("WANVAE", {"tooltip": "VAE model"}),
-                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Strength of the reference embedding"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Base image embeds to extend with LongVie dual (dense + sparse) control latents — connect from an image-embeds producer (e.g. WanVideoImageToVideoEncode)"}),
+                    "vae": ("WANVAE", {"tooltip": "Wan VAE used to encode dense/sparse/prev control videos into latents — connect from WanVideoVAELoader"}),
+                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Multiplier on the dual (dense + sparse) control embedding injected alongside the base image embeds; 1.0 is baseline, 0 disables"}),
                     "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percentage of the embedding application"}),
                     "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percentage of the embedding application"}),
                     "first_frame_noise_level": ("FLOAT", {"default": 0.925926, "min": 0.0, "max": 1.0, "step": 0.000001, "tooltip": "Noise level for the first frame when using previous frames"}),
                 },
                 "optional": {
-                    "dense": ("IMAGE", {"tooltip": "Dense control signal (depth) video input"}),
+                    "dense": ("IMAGE", {"tooltip": "Per-frame dense control video (typically inverted depth maps); colors are inverted internally to match comfy depth convention"}),
                     "sparse": ("IMAGE", {"tooltip": "Sparse control signal (tracks) video input"}),
                     "prev_images": ("IMAGE", {"tooltip": "Previous frames for temporal consistency, default is 8 frames"}),
                 }

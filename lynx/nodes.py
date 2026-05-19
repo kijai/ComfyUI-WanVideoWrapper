@@ -19,7 +19,7 @@ class LoadLynxResampler:
         return {
             "required": {
                 "model_name": (folder_paths.get_filename_list("diffusion_models"), {"tooltip": "These models are loaded from 'ComfyUI/models/diffusion_models'"}),
-                "precision": (["fp32", "bf16", "fp16"], {"default": "fp16"}),
+                "precision": (["fp32", "bf16", "fp16"], {"default": "fp16", "tooltip": "Computation/storage dtype for the Lynx resampler weights; fp16 is the safe default, fp32 is most accurate but uses more VRAM"}),
             },
         }
 
@@ -58,7 +58,7 @@ class LynxInsightFaceCrop:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "image": ("IMAGE", {"tooltip": "Input images for the model"}),
+                "image": ("IMAGE", {"tooltip": "Source portrait image; the first frame is run through InsightFace landmark detection and aligned into a 112×112 IP-face crop plus a 256×256 reference crop"}),
             },
         }
 
@@ -96,8 +96,8 @@ class LynxEncodeFaceIP:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "resampler": ("LYNXRESAMPLER", {"tooltip": "lynx resampler model"}),
-                "ip_image": ("IMAGE", {"tooltip": "Input images for the model"}),
+                "resampler": ("LYNXRESAMPLER", {"tooltip": "Loaded Lynx resampler that maps ArcFace embeddings into the Wan IP-adapter conditioning space — connect from Load Lynx Resampler"}),
+                "ip_image": ("IMAGE", {"tooltip": "Aligned 112×112 IP-face crop (from LynxInsightFaceCrop) to encode as the identity reference for the IP-adapter; range is normalized to [-1,1] before ArcFace embedding"}),
             },
         }
 
@@ -137,11 +137,11 @@ class DrawArcFaceLandmarks:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "lynx_face_embeds": ("LYNXIP", {"tooltip": "lynx resampler model"}),
+                "lynx_face_embeds": ("LYNXIP", {"tooltip": "Lynx face IP embeddings (carries ArcFace landmarks used for the overlay) — connect from Lynx Encode Face IP"}),
                 "image": ("IMAGE", {"tooltip": "Input images for the model"}),
             },
             "optional": {
-                "image": ("IMAGE",)
+                "image": ("IMAGE", {"tooltip": "Same socket as the required image — kept for backward compatibility; wire the source image here"})
             }
         }
 
@@ -167,18 +167,18 @@ class WanVideoAddLynxEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "ip_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the ip adapter face feature"}),
-                    "ref_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the reference feature"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing Wan image-embeds bundle to extend with Lynx identity conditioning — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / any other embeds producer"}),
+                    "ip_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the IP-adapter ArcFace identity injection (lynx_ip_embeds); higher = stronger face lock, 1.0 is the trained default"}),
+                    "ref_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the reference-image latent feature (ref_image path); higher = more appearance match, 1.0 is the trained default"}),
                     "lynx_cfg_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "If above 1.0 and main cfg_scale is above 1.0, run extra pass, default value 2.0"}),
-                    "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent to apply the ref "}),
-                    "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent to apply the ref "}),
+                    "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start of the denoising schedule (0–1) at which the Lynx face/ref conditioning becomes active"}),
+                    "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End of the denoising schedule (0–1) after which the Lynx face/ref conditioning is dropped"}),
                 },
                 "optional": {
                     "vae": ("WANVAE", {"tooltip": "VAE model, only needed if ref_image is provided"}),
-                    "lynx_ip_embeds": ("LYNXIP", {"tooltip": "lynx face embeddings"}),
-                    "ref_image": ("IMAGE",),
-                    "ref_text_embed": ("WANVIDEOTEXTEMBEDS",),
+                    "lynx_ip_embeds": ("LYNXIP", {"tooltip": "Lynx face IP embeddings produced from a cropped face image — connect from Lynx Encode Face IP"}),
+                    "ref_image": ("IMAGE", {"tooltip": "Optional reference portrait image (typically the 256×256 ref_image from LynxInsightFaceCrop); VAE-encoded into a latent that feeds the ref_scale pathway. Requires vae and ref_text_embed to be wired."}),
+                    "ref_text_embed": ("WANVIDEOTEXTEMBEDS", {"tooltip": "Text embeddings paired with ref_image (e.g. describing the reference subject); required whenever ref_image is wired — connect from WanVideoTextEncode/Cached"}),
                     "ref_blocks_to_use": ("STRING", {"default": "", "forceInput": True, "tooltip": "Comma-separated list of block indices and ranges to use for reference feature, e.g. '0-20, 25, 28, 35-39'. If empty, use all blocks."}),
                 }
         }

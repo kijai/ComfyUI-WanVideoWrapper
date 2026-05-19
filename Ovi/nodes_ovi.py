@@ -84,7 +84,7 @@ class OviMMAudioVAELoader:
             "required": {
                 "vae": (s.all_files, {"tooltip": "MMAudio VAE 16k (v1-16.pth) model from models/vae or models/mmaudio"}),
                 "vocoder": (s.all_files, {"tooltip": "BigVGAN vocoder (best_netG.pt) from models/vae or models/mmaudio"}),
-                "precision": (["bf16", "fp16", "fp32"], {"default": "bf16"}),
+                "precision": (["bf16", "fp16", "fp32"], {"default": "bf16", "tooltip": "Compute dtype the MMAudio VAE+vocoder load at; bf16 is the default and matches Ovi's training precision"}),
             }
         }
 
@@ -116,8 +116,8 @@ class WanVideoDecodeOviAudio:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "mmaudio_vae": ("MMAUDIOVAE",),
-                    "samples": ("LATENT",),
+                    "mmaudio_vae": ("MMAUDIOVAE", {"tooltip": "MMAudio VAE+vocoder bundle — connect from OviMMAudioVAELoader"}),
+                    "samples": ("LATENT", {"tooltip": "Sampled latents dict containing an 'latent_ovi_audio' tensor; decoded back to a 16 kHz waveform via the MMAudio VAE+vocoder"}),
                 }
         }
 
@@ -146,8 +146,8 @@ class WanVideoEncodeOviAudio:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "mmaudio_vae": ("MMAUDIOVAE",),
-                    "audio": ("AUDIO",),
+                    "mmaudio_vae": ("MMAUDIOVAE", {"tooltip": "MMAudio VAE+vocoder bundle — connect from OviMMAudioVAELoader"}),
+                    "audio": ("AUDIO", {"tooltip": "Reference audio waveform; resampled to 16 kHz mono and encoded into the MMAudio latent space for use as audio conditioning"}),
                 }
         }
 
@@ -178,8 +178,8 @@ class WanVideoAddOviAudioToLatents:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "original_samples": ("LATENT",),
-                    "audio_samples": ("LATENT",),
+                    "original_samples": ("LATENT", {"tooltip": "Existing latent dict (typically video latents from a sampler); audio_samples keys are merged on top to attach MMAudio latents"}),
+                    "audio_samples": ("LATENT", {"tooltip": "MMAudio latent dict (carries 'latent_ovi_audio') — connect from WanVideoEncodeOviAudio or WanVideoEmptyMMAudioLatents"}),
                 }
         }
 
@@ -198,7 +198,7 @@ class WanVideoEmptyMMAudioLatents:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "length": ("INT", {"default": 157, "min": 1, "max": 10000, "step": 1, "tooltip": "Length of the audio latent sequence"}),
+                    "length": ("INT", {"default": 157, "min": 1, "max": 10000, "step": 1, "tooltip": "Number of MMAudio latent timesteps (16 kHz mel frames) to allocate; ~157 = 5 s of audio at Ovi's default rate"}),
                 }
         }
 
@@ -217,11 +217,11 @@ class WanVideoOviCFG:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "original_text_embeds": ("WANVIDEOTEXTEMBEDS",),
-            "ovi_audio_cfg": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 100.0, "step": 0.01}),
+            "original_text_embeds": ("WANVIDEOTEXTEMBEDS", {"tooltip": "Base Wan text embeddings (positive + negative prompt) to extend with Ovi audio-branch CFG settings — connect from WanVideoTextEncode/Cached"}),
+            "ovi_audio_cfg": ("FLOAT", {"default": 3.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Separate CFG scale for the Ovi audio branch; higher = stronger audio-prompt adherence, 1.0 disables the audio uncond pass"}),
             },
             "optional": {
-                "ovi_negative_text_embeds": ("WANVIDEOTEXTEMBEDS",),
+                "ovi_negative_text_embeds": ("WANVIDEOTEXTEMBEDS", {"tooltip": "Optional separate negative-prompt embeddings for the audio CFG pass; if omitted, the original positive embeddings are reused as the audio negative — connect from a second WanVideoTextEncode"}),
             }
         }
 

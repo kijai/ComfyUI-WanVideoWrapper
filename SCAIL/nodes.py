@@ -9,15 +9,15 @@ class WanVideoAddSCAILReferenceEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "vae": ("WANVAE", {"tooltip": "VAE model"}),
-                    "ref_image": ("IMAGE",),
-                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Strength of the reference embedding"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Base image embeds to extend with the SCAIL reference latent — connect from a WanVideo*Embeds producer"}),
+                    "vae": ("WANVAE", {"tooltip": "Wan VAE used to encode the reference image into a latent — connect from WanVideoVAELoader"}),
+                    "ref_image": ("IMAGE", {"tooltip": "Single reference appearance image to encode and inject as the SCAIL identity/style cue"}),
+                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Multiplier on the encoded SCAIL reference latent injected into the diffusion conditioning; 0 disables the reference"}),
                     "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percentage of the embedding application"}),
                     "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percentage of the embedding application"}),
                 },
                 "optional": {
-                    "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "Clip vision encoded image"}),
+                    "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "Optional CLIP vision embeds of the reference image used as additional context — connect from WanVideoClipVisionEncode"}),
                 }
         }
 
@@ -51,10 +51,10 @@ class WanVideoAddSCAILPoseEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "vae": ("WANVAE", {"tooltip": "VAE model"}),
-                    "pose_images": ("IMAGE", {"tooltip": "Pose images for the entire video"}),
-                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Strength of the pose control"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Base image embeds to extend with SCAIL pose conditioning — connect from a WanVideo*Embeds producer"}),
+                    "vae": ("WANVAE", {"tooltip": "Wan VAE used to encode the pose-image sequence into a latent — connect from WanVideoVAELoader"}),
+                    "pose_images": ("IMAGE", {"tooltip": "Per-frame pose-stick images covering the entire output video; encoded by the VAE into the SCAIL pose latent"}),
+                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Multiplier on the SCAIL pose latent injected into the diffusion conditioning; 0 disables pose control"}),
                     "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percentage of the pose control application"}),
                     "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percentage of the pose control application"}),
                 },

@@ -139,14 +139,14 @@ class WanVideoATITracks:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "model": ("WANVIDEOMODEL", ),
-            "tracks": ("STRING",),
-            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Width of the image to encode"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Height of the image to encode"}),
-            "temperature": ("FLOAT", {"default": 220.0, "min": 0.0, "max": 1000.0, "step": 0.1}),
-            "topk": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
-            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the steps to apply ATI"}),
-            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the steps to apply ATI"}),
+            "model": ("WANVIDEOMODEL",  {"tooltip": "Wan video diffusion model to patch with ATI motion guidance — connect from WanVideoModelLoader"}),
+            "tracks": ("STRING", {"tooltip": "JSON-encoded list of 2D point tracks (each track a list of {x,y} per frame) used as sparse motion guidance, e.g. CoTracker output"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Width in pixels used to normalize track coordinates; should match the latent canvas width"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Height in pixels used to normalize track coordinates; should match the latent canvas height"}),
+            "temperature": ("FLOAT", {"default": 220.0, "min": 0.0, "max": 1000.0, "step": 0.1, "tooltip": "Sharpness of the spatial gaussian that maps a track point onto nearby latent tokens; higher = tighter / more localized influence"}),
+            "topk": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1, "tooltip": "How many nearest latent tokens each track point writes into; higher spreads the motion cue across more tokens"}),
+            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Fraction of total sampling steps at which ATI motion guidance starts applying (0.0 = from step 0, 1.0 = never)"}),
+            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Fraction of total sampling steps at which ATI motion guidance stops applying (1.0 = through the final step)"}),
         },
         }
 
@@ -179,11 +179,11 @@ class WanVideoATITracksVisualize:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "images": ("IMAGE",),
-            "tracks": ("STRING",),
-            "min_radius": ("INT", {"default": 1, "min": 0, "max": 100, "step": 1, "tooltip": "radius for the very first point (oldest)"}),
-            "max_radius": ("INT", {"default": 6, "min": 0, "max": 100, "step": 1, "tooltip": "radius for the current point (newest)"}),
-            "max_retain": ("INT", {"default": 50, "min": 0, "max": 100, "step": 1, "tooltip": "Maximum number of points to retain"}),
+            "images": ("IMAGE", {"tooltip": "Video frames to overlay the track trails onto for visualization"}),
+            "tracks": ("STRING", {"tooltip": "JSON-encoded list of 2D point tracks (same format as WanVideoATITracks) to overlay onto the video"}),
+            "min_radius": ("INT", {"default": 1, "min": 0, "max": 100, "step": 1, "tooltip": "Pixel radius drawn for the oldest retained point in a track's trail"}),
+            "max_radius": ("INT", {"default": 6, "min": 0, "max": 100, "step": 1, "tooltip": "Pixel radius drawn for the newest point in a track's trail; trail tapers from max_radius down to min_radius"}),
+            "max_retain": ("INT", {"default": 50, "min": 0, "max": 100, "step": 1, "tooltip": "Maximum number of past frames to keep in each track's trail before older points fall off"}),
         },
         }
 
@@ -281,12 +281,12 @@ class WanVideoATI_comfy:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "model": ("MODEL", ),
-            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Width of the image to encode"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Height of the image to encode"}),
-            "tracks": ("STRING",),
-            "temperature": ("FLOAT", {"default": 220.0, "min": 0.0, "max": 1000.0, "step": 0.1}),
-            "topk": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1}),
+            "model": ("MODEL",  {"tooltip": "Native ComfyUI MODEL to patch with ATI motion guidance (concat_cond override) — connect from a model loader"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Width in pixels used to normalize track coordinates; should match the latent canvas width"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Height in pixels used to normalize track coordinates; should match the latent canvas height"}),
+            "tracks": ("STRING", {"tooltip": "JSON-encoded list of 2D point tracks (each track a list of {x,y} per frame) used as sparse motion guidance, e.g. CoTracker output"}),
+            "temperature": ("FLOAT", {"default": 220.0, "min": 0.0, "max": 1000.0, "step": 0.1, "tooltip": "Sharpness of the spatial gaussian that maps a track point onto nearby latent tokens; higher = tighter / more localized influence"}),
+            "topk": ("INT", {"default": 2, "min": 1, "max": 10, "step": 1, "tooltip": "How many nearest latent tokens each track point writes into; higher spreads the motion cue across more tokens"}),
             },
         }
 

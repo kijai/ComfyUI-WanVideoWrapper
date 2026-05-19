@@ -297,14 +297,14 @@ class WanVideoBlockSwap:
         return {
             "required": {
                 "blocks_to_swap": ("INT", {"default": 20, "min": 0, "max": 48, "step": 1, "tooltip": "Number of transformer blocks to swap, the 14B model has 40, while the 1.3B and 5B models have 30 blocks. LongCat-video has 48"}),
-                "offload_img_emb": ("BOOLEAN", {"default": False, "tooltip": "Offload img_emb to offload_device"}),
-                "offload_txt_emb": ("BOOLEAN", {"default": False, "tooltip": "Offload time_emb to offload_device"}),
+                "offload_img_emb": ("BOOLEAN", {"default": False, "tooltip": "When on, offload the image-embedding module (img_emb) to offload_device to save additional VRAM at a small speed cost"}),
+                "offload_txt_emb": ("BOOLEAN", {"default": False, "tooltip": "When on, offload the text-embedding module (time/text_emb) to offload_device to save additional VRAM at a small speed cost"}),
             },
             "optional": {
                 "use_non_blocking": ("BOOLEAN", {"default": False, "tooltip": "Use non-blocking memory transfer for offloading, reserves more RAM but is faster"}),
                 "vace_blocks_to_swap": ("INT", {"default": 0, "min": 0, "max": 15, "step": 1, "tooltip": "Number of VACE blocks to swap, the VACE model has 15 blocks"}),
                 "prefetch_blocks": ("INT", {"default": 0, "min": 0, "max": 40, "step": 1, "tooltip": "Number of blocks to prefetch ahead, can speed up processing but increases memory usage. 1 is usually enough to offset speed loss from block swapping, use the debug option to confirm it for your system"}),
-                "block_swap_debug": ("BOOLEAN", {"default": False, "tooltip": "Enable debug logging for block swapping"}),
+                "block_swap_debug": ("BOOLEAN", {"default": False, "tooltip": "Print per-block swap timing to the console; useful for tuning prefetch_blocks and blocks_to_swap"}),
             },
         }
     RETURN_TYPES = ("BLOCKSWAPARGS",)
@@ -321,7 +321,7 @@ class WanVideoVRAMManagement:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "offload_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Percentage of parameters to offload"}),
+                "offload_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Fraction of model parameters to offload to CPU/RAM (0.0–1.0); higher saves more VRAM but slows inference"}),
             },
         }
     RETURN_TYPES = ("VRAM_MANAGEMENTARGS",)
@@ -338,16 +338,16 @@ class WanVideoTorchCompileSettings:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "backend": (["inductor","cudagraphs"], {"default": "inductor"}),
-                "fullgraph": ("BOOLEAN", {"default": False, "tooltip": "Enable full graph mode"}),
-                "mode": (["default", "max-autotune", "max-autotune-no-cudagraphs", "reduce-overhead"], {"default": "default"}),
-                "dynamic": ("BOOLEAN", {"default": False, "tooltip": "Enable dynamic mode"}),
-                "dynamo_cache_size_limit": ("INT", {"default": 64, "min": 0, "max": 1024, "step": 1, "tooltip": "torch._dynamo.config.cache_size_limit"}),
+                "backend": (["inductor","cudagraphs"], {"default": "inductor", "tooltip": "torch.compile backend — inductor is the recommended general-purpose codegen, cudagraphs replays a recorded CUDA graph (lower overhead but stricter shape requirements)"}),
+                "fullgraph": ("BOOLEAN", {"default": False, "tooltip": "When on, error if torch.compile can't trace the whole graph (no graph breaks); off allows partial compilation and is safer"}),
+                "mode": (["default", "max-autotune", "max-autotune-no-cudagraphs", "reduce-overhead"], {"default": "default", "tooltip": "torch.compile optimization mode — default balances compile time and speed; max-autotune searches kernels aggressively; -no-cudagraphs variant disables cudagraphs (needed for dynamic num_frames); reduce-overhead trims Python overhead"}),
+                "dynamic": ("BOOLEAN", {"default": False, "tooltip": "When on, allow dynamic input shapes (recompile less when sizes vary); off pins shapes for max speed but recompiles whenever they change"}),
+                "dynamo_cache_size_limit": ("INT", {"default": 64, "min": 0, "max": 1024, "step": 1, "tooltip": "Sets torch._dynamo.config.cache_size_limit — number of distinct compiled graphs cached before old ones are evicted"}),
                 "compile_transformer_blocks_only": ("BOOLEAN", {"default": True, "tooltip": "Compile only the transformer blocks, usually enough and can make compilation faster and less error prone"}),
             },
             "optional": {
-                "dynamo_recompile_limit": ("INT", {"default": 128, "min": 0, "max": 1024, "step": 1, "tooltip": "torch._dynamo.config.recompile_limit"}),
-                "force_parameter_static_shapes": ("BOOLEAN", {"default": False, "tooltip": "torch._dynamo.config.force_parameter_static_shapes"}),
+                "dynamo_recompile_limit": ("INT", {"default": 128, "min": 0, "max": 1024, "step": 1, "tooltip": "Sets torch._dynamo.config.recompile_limit — number of recompiles tolerated per function before falling back to eager"}),
+                "force_parameter_static_shapes": ("BOOLEAN", {"default": False, "tooltip": "Sets torch._dynamo.config.force_parameter_static_shapes — when on, treats model parameter shapes as static, improving cudagraph compatibility"}),
                 "allow_unmerged_lora_compile": ("BOOLEAN", {"default": False, "tooltip": "Allow LoRA application to be compiled with torch.compile to avoid graph breaks, causes issues with some LoRAs, mostly dynamic ones"}),
             },
         }
@@ -384,8 +384,8 @@ class WanVideoLoraSelect:
                 "strength": ("FLOAT", {"default": 1.0, "min": -1000.0, "max": 1000.0, "step": 0.0001, "tooltip": "LORA strength, set to 0.0 to unmerge the LORA"}),
             },
             "optional": {
-                "prev_lora":("WANVIDLORA", {"default": None, "tooltip": "For loading multiple LoRAs"}),
-                "blocks":("SELECTEDBLOCKS", ),
+                "prev_lora":("WANVIDLORA", {"default": None, "tooltip": "Existing LoRA stack to append this LoRA onto; chain multiple WanVideoLoraSelect* nodes through prev_lora to stack LoRAs (later entries layer on top of earlier ones)"}),
+                "blocks":("SELECTEDBLOCKS",  {"tooltip": "Per-block selection + layer_filter bundle from WanVideoLoraBlockEdit; restricts which transformer blocks the LoRA applies to"}),
                 "low_mem_load": ("BOOLEAN", {"default": False, "tooltip": "Load the LORA model with less VRAM usage, slower loading. This affects ALL LoRAs, not just the current one. No effect if merge_loras is False"}),
                 "merge_loras": ("BOOLEAN", {"default": True, "tooltip": "Merge LoRAs into the model, otherwise they are loaded on the fly. Always disabled for GGUF and scaled fp8 models. This affects ALL LoRAs, not just the current one"}),
             },
@@ -474,12 +474,12 @@ class WanVideoLoraSelectByName(WanVideoLoraSelect):
     def INPUT_TYPES(s):
         return {
             "required": {
-               "lora_name": ("STRING", {"default": "", "multiline": False, "tooltip": "Lora filename to load"}),
+               "lora_name": ("STRING", {"default": "", "multiline": False, "tooltip": "Substring of the LoRA filename to find under ComfyUI/models/loras; first match (substring) is loaded — useful for dynamic LoRA selection via wires"}),
                "strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.0001, "tooltip": "LORA strength, set to 0.0 to unmerge the LORA"}),
             },
             "optional": {
-                "prev_lora":("WANVIDLORA", {"default": None, "tooltip": "For loading multiple LoRAs"}),
-                "blocks":("SELECTEDBLOCKS", ),
+                "prev_lora":("WANVIDLORA", {"default": None, "tooltip": "Existing LoRA stack to append this LoRA onto; chain multiple WanVideoLoraSelect* nodes through prev_lora to stack LoRAs (later entries layer on top of earlier ones)"}),
+                "blocks":("SELECTEDBLOCKS",  {"tooltip": "Per-block selection + layer_filter bundle from WanVideoLoraBlockEdit; restricts which transformer blocks the LoRA applies to"}),
                 "low_mem_load": ("BOOLEAN", {"default": False, "tooltip": "Load the LORA model with less VRAM usage, slower loading. This affects ALL LoRAs, not just the current one. No effect if merge_loras is False"}),
                 "merge_loras": ("BOOLEAN", {"default": True, "tooltip": "Merge LoRAs into the model, otherwise they are loaded on the fly. Always disabled for GGUF and scaled fp8 models. This affects ALL LoRAs, not just the current one"}),
             },
@@ -506,20 +506,20 @@ class WanVideoLoraSelectMulti:
         lora_files = ["none"] + lora_files  # Add "none" as the first option
         return {
             "required": {
-               "lora_0": (lora_files, {"default": "none"}),
+               "lora_0": (lora_files, {"default": "none", "tooltip": "LoRA file from ComfyUI/models/loras (or 'none' to skip this slot)"}),
                 "strength_0": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.0001, "tooltip": "LORA strength, set to 0.0 to unmerge the LORA"}),
-                "lora_1": (lora_files, {"default": "none"}),
+                "lora_1": (lora_files, {"default": "none", "tooltip": "LoRA file from ComfyUI/models/loras (or 'none' to skip this slot)"}),
                 "strength_1": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.0001, "tooltip": "LORA strength, set to 0.0 to unmerge the LORA"}),
-                "lora_2": (lora_files, {"default": "none"}),
+                "lora_2": (lora_files, {"default": "none", "tooltip": "LoRA file from ComfyUI/models/loras (or 'none' to skip this slot)"}),
                 "strength_2": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.0001, "tooltip": "LORA strength, set to 0.0 to unmerge the LORA"}),
-                "lora_3": (lora_files, {"default": "none"}),
+                "lora_3": (lora_files, {"default": "none", "tooltip": "LoRA file from ComfyUI/models/loras (or 'none' to skip this slot)"}),
                 "strength_3": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.0001, "tooltip": "LORA strength, set to 0.0 to unmerge the LORA"}),
-                "lora_4": (lora_files, {"default": "none"}),
+                "lora_4": (lora_files, {"default": "none", "tooltip": "LoRA file from ComfyUI/models/loras (or 'none' to skip this slot)"}),
                 "strength_4": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.0001, "tooltip": "LORA strength, set to 0.0 to unmerge the LORA"}),
             },
             "optional": {
-                "prev_lora":("WANVIDLORA", {"default": None, "tooltip": "For loading multiple LoRAs"}),
-                "blocks":("SELECTEDBLOCKS", ),
+                "prev_lora":("WANVIDLORA", {"default": None, "tooltip": "Existing LoRA stack to append this LoRA onto; chain multiple WanVideoLoraSelect* nodes through prev_lora to stack LoRAs (later entries layer on top of earlier ones)"}),
+                "blocks":("SELECTEDBLOCKS",  {"tooltip": "Per-block selection + layer_filter bundle from WanVideoLoraBlockEdit; restricts which transformer blocks the LoRA applies to"}),
                 "low_mem_load": ("BOOLEAN", {"default": False, "tooltip": "Load the LORA model with less VRAM usage, slower loading. No effect if merge_loras is False"}),
                 "merge_loras": ("BOOLEAN", {"default": True, "tooltip": "Merge LoRAs into the model, otherwise they are loaded on the fly. Always disabled for GGUF and scaled fp8 models. This affects ALL LoRAs, not just the current one"}),
 
@@ -589,7 +589,7 @@ class WanVideoExtraModelSelect:
                 "extra_model": (folder_paths.get_filename_list("unet_gguf") + folder_paths.get_filename_list("diffusion_models"), {"tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' path to extra state dict to add to the main model"}),
             },
             "optional": {
-                "prev_model":("VACEPATH", {"default": None, "tooltip": "For loading multiple extra models"}),
+                "prev_model":("VACEPATH", {"default": None, "tooltip": "Chain another WanVideoExtraModelSelect here to stack multiple extra modules (e.g. VACE + MTV Crafter) onto the main model"}),
             },
         }
 
@@ -619,7 +619,7 @@ class WanVideoLoraBlockEdit:
         for i in range(40):
             arg_dict["blocks.{}.".format(i)] = argument
 
-        return {"required": arg_dict, "optional": {"layer_filter": ("STRING", {"default": "", "multiline": True})}}
+        return {"required": arg_dict, "optional": {"layer_filter": ("STRING", {"default": "", "multiline": True, "tooltip": "Comma-separated substrings; LoRA keys containing any of these tokens are excluded from application. Empty disables filtering."})}}
 
     RETURN_TYPES = ("SELECTEDBLOCKS", )
     RETURN_NAMES = ("blocks", )
@@ -732,10 +732,10 @@ class WanVideoSetLoRAs:
         return {
             "required":
             {
-                "model": ("WANVIDEOMODEL", ),
+                "model": ("WANVIDEOMODEL",  {"tooltip": "Wan diffusion transformer to attach LoRAs to (without merging the LoRA weights into the base model) — connect from WanVideoModelLoader"}),
             },
             "optional": {
-                "lora": ("WANVIDLORA", ),
+                "lora": ("WANVIDLORA",  {"tooltip": "LoRA stack to attach directly into the model's linear layers (no merge); requires merge_loras=False in the upstream LoRA select node — connect from WanVideoLoraSelect / WanVideoLoraSelectMulti / WanVideoLoraSelectByName"}),
             }
         }
 
@@ -1018,14 +1018,14 @@ class WanVideoSetAttentionModeOverride:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model": ("WANVIDEOMODEL", ),
-                "attention_mode": (attention_modes, {"default": "sdpa"}),
+                "model": ("WANVIDEOMODEL",  {"tooltip": "Wan diffusion transformer whose attention backend is being overridden for a step / block range — connect from WanVideoModelLoader (or the output of another set-model node)"}),
+                "attention_mode": (attention_modes, {"default": "sdpa", "tooltip": "Attention backend used while the override is active — sdpa is the safe default; sageattn / radial_sage_attention are faster on supported GPUs/resolutions; flash_attn_2/3 require those packages installed"}),
                 "start_step": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1, "tooltip": "Step to start applying the attention mode override"}),
                 "end_step": ("INT", {"default": 10000, "min": 1, "max": 10000, "step": 1, "tooltip": "Step to end applying the attention mode override"}),
                 "verbose": ("BOOLEAN", {"default": False, "tooltip": "Print verbose info about attention mode override during generation"}),
             },
             "optional": {
-                "blocks":("INT", {"forceInput": True} ),
+                "blocks":("INT", {"forceInput": True, "tooltip": "Optional list of transformer block indices to limit the override to; wire from a list-producing INT node. Unset = apply to all blocks."} ),
             }
         }
 
@@ -1055,7 +1055,7 @@ class WanVideoUltraVicoSettings:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model": ("WANVIDEOMODEL", ),
+                "model": ("WANVIDEOMODEL",  {"tooltip": "Wan diffusion transformer to attach UltraVico (DiT-Extrapolation) settings to; requires attention_mode = sageattn_ultravico to take effect — connect from WanVideoModelLoader"}),
                 "alpha": ("FLOAT", {"default": 0.9, "min": 0.0, "max": 1.0, "step": 0.001, "tooltip": "Alpha value for the decay, higher values mean slower decay"}),
             },
         }
@@ -1081,21 +1081,21 @@ class WanVideoModelLoader:
             "required": {
                 "model": (folder_paths.get_filename_list("unet_gguf") + folder_paths.get_filename_list("diffusion_models"), {"tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' -folder",}),
 
-            "base_precision": (["fp32", "bf16", "fp16", "fp16_fast"], {"default": "bf16"}),
+            "base_precision": (["fp32", "bf16", "fp16", "fp16_fast"], {"default": "bf16", "tooltip": "Compute precision for non-quantized layers — bf16 is the safe default; fp16_fast enables fp16 tensor-core accumulate (faster on Ada/Hopper, NVIDIA 4000+); fp16 is fastest but most prone to overflow; fp32 is reference quality"}),
             "quantization": (["disabled", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e4m3fn_scaled", "fp8_e4m3fn_scaled_fast", "fp8_e5m2", "fp8_e5m2_fast", "fp8_e5m2_scaled", "fp8_e5m2_scaled_fast"], {"default": "disabled",
                             "tooltip": "Optional quantization method, 'disabled' acts as autoselect based by weights. Scaled modes only work with matching weights, _fast modes (fp8 matmul) require CUDA compute capability >= 8.9 (NVIDIA 4000 series and up), e4m3fn generally can not be torch.compiled on compute capability < 8.9 (3000 series and under)"}),
             "load_device": (["main_device", "offload_device"], {"default": "offload_device", "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"}),
             },
             "optional": {
-                "attention_mode": (attention_modes, {"default": "sdpa"}),
-                "compile_args": ("WANCOMPILEARGS", ),
-                "block_swap_args": ("BLOCKSWAPARGS", ),
-                "lora": ("WANVIDLORA", {"default": None}),
+                "attention_mode": (attention_modes, {"default": "sdpa", "tooltip": "Attention backend — sdpa is the safe default; sageattn / radial_sage_attention are faster on supported GPUs/resolutions; flash_attn_2 / flash_attn_3 require those packages installed"}),
+                "compile_args": ("WANCOMPILEARGS",  {"tooltip": "torch.compile configuration bundle — connect from WanVideoTorchCompileSettings"}),
+                "block_swap_args": ("BLOCKSWAPARGS",  {"tooltip": "Block-swap configuration bundle (how many transformer blocks to offload to CPU) — connect from WanVideoBlockSwap"}),
+                "lora": ("WANVIDLORA", {"default": None, "tooltip": "Stack of LoRAs (name + strength + optional block filter) to apply to this model — connect from WanVideoLoraSelect / WanVideoLoraSelectMulti / WanVideoLoraSelectByName"}),
                 "vram_management_args": ("VRAM_MANAGEMENTARGS", {"default": None, "tooltip": "Alternative offloading method from DiffSynth-Studio, more aggressive in reducing memory use than block swapping, but can be slower"}),
                 "extra_model": ("VACEPATH", {"default": None, "tooltip": "Extra model to add to the main model, ie. VACE or MTV Crafter"}),
                 "fantasytalking_model": ("FANTASYTALKINGMODEL", {"default": None, "tooltip": "FantasyTalking model https://github.com/Fantasy-AMAP"}),
-                "multitalk_model": ("MULTITALKMODEL", {"default": None, "tooltip": "Multitalk model"}),
-                "fantasyportrait_model": ("FANTASYPORTRAITMODEL", {"default": None, "tooltip": "FantasyPortrait model"}),
+                "multitalk_model": ("MULTITALKMODEL", {"default": None, "tooltip": "Multi-speaker talking-head conditioning module — connect from a Multitalk loader to add audio-driven lip-sync for multiple speakers"}),
+                "fantasyportrait_model": ("FANTASYPORTRAITMODEL", {"default": None, "tooltip": "FantasyPortrait identity-preserving portrait module — connect from a FantasyPortrait loader to anchor on a reference face"}),
                 "rms_norm_function": (["default", "pytorch"], {"default": "default", "tooltip": "RMSNorm function to use, 'pytorch' is the new native torch RMSNorm, which is faster (when not using torch.compile mostly) but changes results slightly. 'default' is the original WanRMSNorm"}),
             }
         }
@@ -1883,9 +1883,9 @@ class WanVideoVAELoader:
             },
             "optional": {
                 "precision": (["fp16", "fp32", "bf16"],
-                    {"default": "bf16"}
+                    {"default": "bf16", "tooltip": "Compute precision for the VAE — bf16 is the safe default; fp16 is faster but more prone to overflow at high resolutions; fp32 is reference quality"}
                 ),
-                "compile_args": ("WANCOMPILEARGS", ),
+                "compile_args": ("WANCOMPILEARGS",  {"tooltip": "torch.compile configuration bundle applied to the VAE decoder — connect from WanVideoTorchCompileSettings"}),
                 "use_cpu_cache": ("BOOLEAN", {"default": False, "tooltip": "Reduces VRAM usage, but slows the VAE down a lot"}),
                 "verbose": ("BOOLEAN", {"default": False, "tooltip": "Enables memory usage logging when using the model"}),
             }
@@ -1935,8 +1935,8 @@ class WanVideoTinyVAELoader:
                 "model_name": (folder_paths.get_filename_list("vae_approx"), {"tooltip": "These models are loaded from 'ComfyUI/models/vae_approx'"}),
             },
             "optional": {
-                "precision": (["fp16", "fp32", "bf16"], {"default": "fp16"}),
-                "parallel": ("BOOLEAN", {"default": False, "tooltip": "uses more memory but is faster"}),
+                "precision": (["fp16", "fp32", "bf16"], {"default": "fp16", "tooltip": "Compute precision for the tiny VAE — fp16 is fast and usually sufficient for preview-quality decoding; bf16 / fp32 for better numerical stability"}),
+                "parallel": ("BOOLEAN", {"default": False, "tooltip": "When on, decode VAE frames in parallel — uses more memory but is faster"}),
             }
         }
 
@@ -1966,12 +1966,12 @@ class LoadWanVideoT5TextEncoder:
             "required": {
                 "model_name": (folder_paths.get_filename_list("text_encoders"), {"tooltip": "These models are loaded from 'ComfyUI/models/text_encoders'"}),
                 "precision": (["fp32", "bf16"],
-                    {"default": "bf16"}
+                    {"default": "bf16", "tooltip": "Compute precision for the UMT5 text encoder — bf16 is the safe default; fp32 is reference quality but uses 2x VRAM"}
                 ),
             },
             "optional": {
-                "load_device": (["main_device", "offload_device"], {"default": "offload_device"}),
-                "quantization": (['disabled', 'fp8_e4m3fn'], {"default": 'disabled', "tooltip": "optional quantization method"}),
+                "load_device": (["main_device", "offload_device"], {"default": "offload_device", "tooltip": "Initial device for the text encoder — offload_device (CPU) saves VRAM and is fine since encoding runs once per prompt; main_device keeps it on GPU for faster repeated encodes"}),
+                "quantization": (['disabled', 'fp8_e4m3fn'], {"default": 'disabled', "tooltip": "Optional quantization for the text encoder — fp8_e4m3fn halves VRAM use at a tiny quality cost; 'disabled' loads weights as-is and auto-detects fp8 if present"}),
             }
         }
 
@@ -2079,11 +2079,11 @@ class LoadWanVideoClipTextEncoder:
             "required": {
                 "model_name": (folder_paths.get_filename_list("clip_vision") + folder_paths.get_filename_list("text_encoders"), {"tooltip": "These models are loaded from 'ComfyUI/models/clip_vision'"}),
                  "precision": (["fp16", "fp32", "bf16"],
-                    {"default": "fp16"}
+                    {"default": "fp16", "tooltip": "Compute precision for the CLIP vision encoder — fp16 is the safe default; bf16 is similar quality with better range; fp32 is reference quality but uses 2x VRAM"}
                 ),
             },
             "optional": {
-                "load_device": (["main_device", "offload_device"], {"default": "offload_device"}),
+                "load_device": (["main_device", "offload_device"], {"default": "offload_device", "tooltip": "Initial device for the CLIP vision encoder — offload_device (CPU) saves VRAM and is fine for one-shot encoding; main_device keeps it on GPU for faster repeated encodes"}),
             }
         }
 
