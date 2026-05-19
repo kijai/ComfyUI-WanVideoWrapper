@@ -854,7 +854,13 @@ class WanVideoSampler:
             render_latent = uni3c_embeds["render_latent"].to(device)
             uni3c_data = uni3c_embeds.copy()
             if render_latent.shape != noise.shape:
-                render_latent = torch.nn.functional.interpolate(render_latent, size=(noise.shape[1], noise.shape[2], noise.shape[3]), mode='trilinear', align_corners=False)
+                # If temporal is shorter (prefix/transition expansion), pad with first frame at beginning
+                if has_prefix:
+                    pad_len = 10  # 37 pixel frames → 10 latent frames
+                    first_frame = render_latent[:, :, :1].repeat(1, 1, pad_len, 1, 1)
+                    render_latent = torch.cat([first_frame, render_latent], dim=2)
+                if render_latent.shape != noise.shape:
+                    render_latent = torch.nn.functional.interpolate(render_latent, size=(noise.shape[1], noise.shape[2], noise.shape[3]), mode='trilinear', align_corners=False)
             uni3c_data["render_latent"] = render_latent
 
         # Enhance-a-video (feta)
