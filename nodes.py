@@ -1261,11 +1261,16 @@ class WanVideoAnimateEmbeds:
             trim = (num_frames - 1) % 4
             num_frames -= trim
 
-            # Shift control signals by extra pixel frames (pad beginning with first frame)
+            # Pad beginning with sampled+reversed frames for pose/face (sparse temporal context),
+            # repeat frame 0 for bg/mask
             if pose_images is not None:
-                pose_images = torch.cat([pose_images[0:1].repeat(extra, 1, 1, 1), pose_images], dim=0)
+                sampled = pose_images[0:extra*2:2]        # indices 0,2,4,... (extra frames)
+                sampled = torch.flip(sampled, [0])         # reverse order
+                pose_images = torch.cat([sampled, pose_images], dim=0)
             if face_images is not None:
-                face_images = torch.cat([face_images[0:1].repeat(extra, 1, 1, 1), face_images], dim=0)
+                sampled = face_images[0:extra*2:2]
+                sampled = torch.flip(sampled, [0])
+                face_images = torch.cat([sampled, face_images], dim=0)
             if bg_images is not None:
                 bg_images = torch.cat([bg_images[0:1].repeat(extra, 1, 1, 1), bg_images], dim=0)
             if mask is not None:
