@@ -1272,9 +1272,13 @@ class WanVideoAnimateEmbeds:
                 sampled = torch.flip(sampled, [0])
                 face_images = torch.cat([sampled, face_images], dim=0)
             if bg_images is not None:
-                bg_images = torch.cat([bg_images[0:1].repeat(extra, 1, 1, 1), bg_images], dim=0)
+                sampled = bg_images[0:extra*2:2]
+                sampled = torch.flip(sampled, [0])
+                bg_images = torch.cat([sampled, bg_images], dim=0)
             if mask is not None:
-                mask = torch.cat([mask[0:1].repeat(extra, 1, 1), mask], dim=0)
+                sampled = mask[0:extra*2:2]
+                sampled = torch.flip(sampled, [0])
+                mask = torch.cat([sampled, mask], dim=0)
         # -----------------------------------------------------------------
 
         if prefix_frames is not None:
