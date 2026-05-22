@@ -489,6 +489,7 @@ class WanVideoSampler:
                 log.info(f"Linear decay mask values: {transition_mask_values.tolist()}")
         # ================================================================
         has_prefix = image_embeds.get("has_prefix", False)
+        canvas_expansion_px = image_embeds.get("canvas_expansion_px", 0)
         if has_prefix:
             log.info("Prefix frames: detected, will prepend indices 0-5 to each window (except first)")
         if wananimate_loop and context_options is not None:
@@ -2302,6 +2303,8 @@ class WanVideoSampler:
                         ref_images = image_embeds.get("ref_image", None)
                         bg_images = image_embeds.get("bg_images", None)
                         pose_images = image_embeds.get("pose_images", None)
+                        prefix_ctx = image_embeds.get("prefix_ctx", None)
+                        prefix_T = image_embeds.get("prefix_T", 0)
 
                         current_ref_images = image_embeds.get("start_ref_image", None)
                         if current_ref_images is not None:
@@ -2353,10 +2356,10 @@ class WanVideoSampler:
 
                             self.cache_state = [None, None]
 
-                            noise = torch.randn(16, latent_window_size + 1, lat_h, lat_w, dtype=torch.float32, device=torch.device("cpu"), generator=seed_g).to(device)
+                            noise = torch.randn(16, latent_window_size + 1 + prefix_T, lat_h, lat_w, dtype=torch.float32, device=torch.device("cpu"), generator=seed_g).to(device)
                             seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
 
-                            if current_ref_images is not None or bg_images is not None or ref_latent is not None or has_transition:
+                            if current_ref_images is not None or bg_images is not None or ref_latent is not None or has_transition or prefix_ctx is not None:
                                 if offload:
                                     offload_transformer(transformer, remove_lora=False)
                                     offloaded = True
@@ -2427,9 +2430,10 @@ class WanVideoSampler:
                                     else:
                                         temporal_ref_latents = temporal_ref_latents[:, :msk.shape[1]]
 
-                                if ref_latent is not None:
+                                if ref_latent is not None or prefix_ctx is not None:
+                                    ref_part = prefix_ctx if prefix_ctx is not None else ref_latent
                                     temporal_ref_latents = torch.cat([msk, temporal_ref_latents], dim=0) # 4+C T H W
-                                    image_cond_in = torch.cat([ref_latent.to(device), temporal_ref_latents], dim=1) # 4+C T+trefs H W
+                                    image_cond_in = torch.cat([ref_part.to(device), temporal_ref_latents], dim=1) # 4+C T+trefs H W
                                     del temporal_ref_latents, msk, bg_image_slice
                                 else:
                                     image_cond_in = torch.cat([torch.tile(torch.zeros_like(noise[:1]), [4, 1, 1, 1]), torch.zeros_like(noise)], dim=0).to(device)
@@ -2448,6 +2452,16 @@ class WanVideoSampler:
                                 face_images_in = torch.zeros(1, 3, frame_window_size, 512, 512, device=device, dtype=torch.float32)
                             elif wananim_face_pixels is not None:
                                 face_images_in = face_images[:, :, start:end].to(device, torch.float32) if face_images is not None else None
+
+                            # ============ Prefix prepend for looping: copy first frame of current chunk ============
+                            if prefix_T > 0:
+                                if pose_input_slice is not None:
+                                    first_pose = pose_input_slice[:, :, :1].repeat(1, 1, prefix_T, 1, 1)
+                                    pose_input_slice = torch.cat([first_pose, pose_input_slice], dim=2)
+                                if face_images_in is not None:
+                                    first_face = face_images_in[:, :, :1].repeat(1, 1, prefix_T * 4, 1, 1)
+                                    face_images_in = torch.cat([first_face, face_images_in], dim=2)
+                            # ========================================================================================
 
                             if samples is not None:
                                 input_samples = samples["samples"]
@@ -2541,6 +2555,9 @@ class WanVideoSampler:
                                     timestep, i, cache_state=self.cache_state, image_cond=image_cond_in, clip_fea=clip_fea, wananim_face_pixels=face_images_in,
                                     wananim_pose_latents=pose_input_slice, uni3c_data=uni3c_data_input,
                                  )
+                                if prefix_T > 0:
+                                    noise_pred = noise_pred[:, prefix_T:]
+                                    latent = latent[:, prefix_T:]
                                 if callback is not None:
                                     callback_latent = (latent_model_input.to(device) - noise_pred.to(device) * t.to(device) / 1000).detach().permute(1,0,2,3)
                                     callback(step_iteration_count, callback_latent, None, estimated_iterations*(len(timesteps)))
@@ -2771,6 +2788,7 @@ class WanVideoSampler:
             "end_image": end_image if not fun_or_fl2v_model else None,
             "has_ref": has_ref,
             "has_prefix": has_prefix,
+            "canvas_expansion_px": canvas_expansion_px,
             "drop_last": drop_last,
             "generator_state": seed_g.get_state(),
             "original_image": original_image.cpu() if original_image is not None else None,
