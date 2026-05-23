@@ -1237,6 +1237,8 @@ class WanVideoAnimateEmbeds:
             # --- [Core Mod] Reserve space for insertion logic and shift subsequent actions ---
             # 1. Expand canvas: Add space for 21 pixel frames (corresponding to 6 Latent frames).
             num_frames += 21
+            trim = (num_frames - 1) % 4
+            num_frames -= trim
 
             # 2. Shift control signals by 21 pixel frames with sampled+reversed padding
             if pose_images is not None:
