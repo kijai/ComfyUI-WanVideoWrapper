@@ -1343,8 +1343,26 @@ class WanAttentionBlock(nn.Module):
                         if audio_output_cond is not None:
                             x_audio = torch.cat([audio_output_cond, x_audio], dim=1).contiguous()
                     else:
-                        x_audio = self.audio_cross_attn(self.norm_x(x.to(self.norm_x.weight.dtype)).to(input_dtype), encoder_hidden_states=multitalk_audio_embedding,
-                                                    shape=grid_sizes[0], x_ref_attn_map=x_ref_attn_map, human_num=human_num)
+                        # audio temporal frames may differ from grid_sizes when external conditioning
+                        # (e.g. SCAIL pose ref_latent) modifies the spatial-temporal token layout
+                        x_normed = self.norm_x(x.to(self.norm_x.weight.dtype)).to(input_dtype)
+                        N_h, N_w = grid_sizes[0][1].item(), grid_sizes[0][2].item()
+                        S = N_h * N_w
+                        audio_N_t = multitalk_audio_embedding.shape[0]
+                        audio_tokens = audio_N_t * S
+                        if grid_sizes[0][0].item() != audio_N_t or x_normed.shape[1] != audio_tokens:
+                            x_for_audio = x_normed[:, :audio_tokens]
+                            audio_shape = grid_sizes[0].clone()
+                            audio_shape[0] = audio_N_t
+                        else:
+                            x_for_audio = x_normed
+                            audio_shape = grid_sizes[0]
+                        x_audio = self.audio_cross_attn(x_for_audio, encoder_hidden_states=multitalk_audio_embedding,
+                                                    shape=audio_shape, x_ref_attn_map=x_ref_attn_map, human_num=human_num)
+                        if x_normed.shape[1] > audio_tokens:
+                            x_audio_padded = torch.zeros(x.shape, dtype=x_audio.dtype, device=x_audio.device)
+                            x_audio_padded[:, :audio_tokens] = x_audio
+                            x_audio = x_audio_padded
                     x.add_(x_audio, alpha=audio_scale)
                     del x_audio
 
