@@ -311,12 +311,12 @@ class LongCatAvatarWhisperEmbeds:
             actual_num_frames = min(num_frames, actual_frames_from_audio)
             
             if actual_frames_from_audio < num_frames:
-                log.info(f"[MultiTalk] Audio duration ({actual_frames_from_audio} frames) is shorter than requested ({num_frames} frames). Using {actual_num_frames} frames.")
+                log.info(f"[LongCat] Audio duration ({actual_frames_from_audio} frames) is shorter than requested ({num_frames} frames). Using {actual_num_frames} frames.")
 
         # Debug: log final mixed audio length and mode
         total_samples_raw = sum([ao["waveform"].shape[-1] for ao in audio_outputs])
-        log.info(f"[MultiTalk] total raw duration = {total_samples_raw/sr:.3f}s")
-        log.info(f"[MultiTalk] multi_audio_type={multi_audio_type} | final waveform shape={out_audio['waveform'].shape} | length={out_audio['waveform'].shape[-1]} samples | seconds={out_audio['waveform'].shape[-1]/sr:.3f}s (expected {'sum' if multi_audio_type=='add' else 'max'} of raw)")
+        log.info(f"[LongCat] total raw duration = {total_samples_raw/sr:.3f}s")
+        log.info(f"[LongCat] multi_audio_type={multi_audio_type} | final waveform shape={out_audio['waveform'].shape} | length={out_audio['waveform'].shape[-1]} samples | seconds={out_audio['waveform'].shape[-1]/sr:.3f}s (expected {'sum' if multi_audio_type=='add' else 'max'} of raw)")
 
 
         return (multitalk_embeds, out_audio, actual_num_frames)
