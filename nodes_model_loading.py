@@ -1124,8 +1124,10 @@ class WanVideoModelLoader:
         if "sage" in attention_mode:
             try:
                 from sageattention import sageattn
-            except Exception as e:
-                raise ValueError(f"Can't import SageAttention: {str(e)}")
+                use_sageattn = True
+            except ImportError as e:
+                print(f"SageAttention is not available -> falling back to default attention: {e}")
+                use_sageattn = False
 
         gguf = False
         if model.endswith(".gguf"):
