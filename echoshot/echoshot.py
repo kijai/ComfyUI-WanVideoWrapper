@@ -1,6 +1,13 @@
 import torch
 from comfy.model_management import get_autocast_device, get_torch_device
 
+def _rope_real_dtype(device):
+    return torch.float32 if device.type == "mps" else torch.float64
+
+def _rope_freqs_to(freqs, target):
+    dtype = target.dtype if target.is_complex() else None
+    return freqs.to(device=target.device, dtype=dtype)
+
 @torch.autocast(device_type=get_autocast_device(get_torch_device()), enabled=False)
 @torch.compiler.disable()
 def rope_apply_z(x, grid_sizes, freqs, inner_t, shift=6):
@@ -13,7 +20,7 @@ def rope_apply_z(x, grid_sizes, freqs, inner_t, shift=6):
 
         # precompute multipliers
         x_i = torch.view_as_complex(
-            x[i, :seq_len].to(torch.float64).reshape(seq_len, n, -1, 2)
+            x[i, :seq_len].to(_rope_real_dtype(x.device)).reshape(seq_len, n, -1, 2)
         )
         start_ind = [sum(inner_t[i][:_]) for _ in range(len(inner_t[i]))]
         end_ind = [sum(inner_t[i][:_+1]) for _ in range(len(inner_t[i]))]
@@ -26,6 +33,7 @@ def rope_apply_z(x, grid_sizes, freqs, inner_t, shift=6):
         freqs_i = shot_freqs.view(f, 1, 1, -1).expand(f, h, w, -1).reshape(seq_len, 1, -1)
 
         # apply rotary embedding
+        freqs_i = _rope_freqs_to(freqs_i, x_i)
         x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
         x_i = torch.cat([x_i, x[i, seq_len:]])
 
@@ -46,7 +54,7 @@ def rope_apply_c(x, freqs, inner_c, shift=6):
 
         # precompute multipliers
         x_i = torch.view_as_complex(
-            x[i].to(torch.float64).reshape(s, n, -1, 2)
+            x[i].to(_rope_real_dtype(x.device)).reshape(s, n, -1, 2)
         )
 
         freq_select = []
@@ -58,6 +66,7 @@ def rope_apply_c(x, freqs, inner_c, shift=6):
         freqs_i = shot_freqs.view(s, 1, -1)
 
         # apply rotary embedding
+        freqs_i = _rope_freqs_to(freqs_i, x_i)
         x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
 
         # append to collection
@@ -79,7 +88,7 @@ def rope_apply_echoshot(x, grid_sizes, freqs, inner_t, shift=4):
 
         # precompute multipliers
         x_i = torch.view_as_complex(
-            x[i, :seq_len].to(torch.float64).reshape(seq_len, n, -1, 2)
+            x[i, :seq_len].to(_rope_real_dtype(x.device)).reshape(seq_len, n, -1, 2)
         )
         start_ind = [sum(inner_t[i][:_]) for _ in range(len(inner_t[i]))]
         end_ind = [sum(inner_t[i][:_+1]) for _ in range(len(inner_t[i]))]
@@ -96,6 +105,7 @@ def rope_apply_echoshot(x, grid_sizes, freqs, inner_t, shift=4):
         ], dim=-1).reshape(seq_len, 1, -1)
 
         # apply rotary embedding
+        freqs_i = _rope_freqs_to(freqs_i, x_i)
         x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
         x_i = torch.cat([x_i, x[i, seq_len:]])
 
