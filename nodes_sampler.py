@@ -126,8 +126,19 @@ class WanVideoSampler:
                          block_swap_args=block_swap_args, compile_args=model["compile_args"])
 
         if gguf_reader is not None: #handle GGUF
-            load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True,
-                         reader=gguf_reader, block_swap_args=block_swap_args, compile_args=model["compile_args"])
+            # Skip GGUF reload after the first call to avoid heap corruption on
+            # Apple Silicon (MPS): repeatedly re-reading the multi-GB GGUF blob
+            # races MPS async frees against CPU allocations in unified memory
+            # and triggers BUG IN CLIENT OF LIBMALLOC on the 2nd render onward.
+            # Set WANVIDEO_DISABLE_GGUF_RELOAD_GUARD=1 to restore the original
+            # behaviour (needed for mid-process LoRA hot-swap).
+            _gguf_reload_guard = (
+                os.environ.get("WANVIDEO_DISABLE_GGUF_RELOAD_GUARD", "0") != "1"
+            )
+            if not _gguf_reload_guard or not getattr(transformer, "_gguf_weights_loaded", False):
+                load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True,
+                             reader=gguf_reader, block_swap_args=block_swap_args, compile_args=model["compile_args"])
+                transformer._gguf_weights_loaded = True
             set_lora_params_gguf(transformer, patcher.patches)
             transformer.patched_linear = True
         elif len(patcher.patches) != 0: #handle patched linear layers (unmerged loras, fp8 scaled)
