@@ -11,6 +11,9 @@ script_directory = os.path.dirname(os.path.abspath(__file__))
 device = mm.get_torch_device()
 offload_device = mm.unet_offload_device()
 
+# Register face_analysis models folder
+folder_paths.add_model_folder_path("face_analysis", os.path.join(folder_paths.models_dir, "face_analysis"))
+
 from .resampler import Resampler
 
 class LoadLynxResampler:
@@ -112,8 +115,11 @@ class LynxEncodeFaceIP:
         image_in = ip_image.permute(0, 3, 1, 2).to(device) * 2 - 1  # to [-1, 1]
 
         # Face embedding via ArcFace
+        # Get the face_analysis models directory path
+        face_analysis_dir = folder_paths.get_folder_paths("face_analysis")[0]
+
         face_encoder = FaceEncoderArcFace()
-        face_encoder.init_encoder_model(device)
+        face_encoder.init_encoder_model(device, model_rootpath=face_analysis_dir)
         arcface_embed = face_encoder(image_in).to(device, resampler.dtype)[0]
 
         arcface_embed = arcface_embed.reshape([1, -1, 512])
