@@ -1965,7 +1965,7 @@ class LoadWanVideoT5TextEncoder:
         return {
             "required": {
                 "model_name": (folder_paths.get_filename_list("text_encoders"), {"tooltip": "These models are loaded from 'ComfyUI/models/text_encoders'"}),
-                "precision": (["fp32", "bf16"],
+                "precision": (["fp32", "fp16", "bf16"],
                     {"default": "bf16"}
                 ),
             },
