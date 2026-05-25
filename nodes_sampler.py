@@ -724,7 +724,16 @@ class WanVideoSampler:
             if input_samples is not None:
                 input_samples = input_samples.squeeze(0).to(noise)
                 if input_samples.shape[1] != noise.shape[1]:
-                    input_samples = torch.cat([input_samples[:, :1].repeat(1, noise.shape[1] - input_samples.shape[1], 1, 1), input_samples], dim=1)
+                    in_T = input_samples.shape[1]
+                    out_T = noise.shape[1]
+
+                    if in_T < out_T:
+                        # Pad at the END with the last latent frame
+                        pad = input_samples[:, -1:].repeat(1, out_T - in_T, 1, 1)
+                        input_samples = torch.cat([input_samples, pad], dim=1)
+                    else:
+                        # Crop extra frames from the END
+                        input_samples = input_samples[:, :out_T]
 
                 if add_noise_to_samples:
                     latent_timestep = timesteps[:1].to(noise)
