@@ -2195,7 +2195,29 @@ class WanVideoSampler:
                     elif wananimate_loop:
                         # calculate frame counts
                         total_frames = num_frames
-                        refert_num = 1
+
+                        # EverAnimate integration: when the embeds node sets
+                        # everanimate_mode=True, the loop uses N latent anchors
+                        # + M motion slots with latent-space chunk carry (paper
+                        # convention). Otherwise Kijai's original 1-anchor/RGB-
+                        # roundtrip path is preserved.
+                        everanim_mode = image_embeds.get("everanimate_mode", False)
+                        if everanim_mode:
+                            everanim_N = int(image_embeds.get("num_video_anchor_latents", 4))
+                            everanim_M = int(image_embeds.get("num_motion_latents", 1))
+                            # Latent overlap of N slots maps to RGB refert_num
+                            # = 4N - 3 so that (refert_num - 1)//4 + 1 == N.
+                            refert_num = (everanim_N - 1) * 4 + 1
+                            everanim_prev_last_latent = None
+                            log.info(
+                                f"EverAnimate loop: N={everanim_N} anchor + M={everanim_M} motion, "
+                                f"refert_num={refert_num} RGB frames"
+                            )
+                        else:
+                            everanim_N = 0
+                            everanim_M = 0
+                            refert_num = 1
+                            everanim_prev_last_latent = None
 
                         real_clip_len = frame_window_size - refert_num
                         last_clip_num = (total_frames - refert_num) % real_clip_len
@@ -2262,10 +2284,51 @@ class WanVideoSampler:
 
                             self.cache_state = [None, None]
 
-                            noise = torch.randn(16, latent_window_size + 1, lat_h, lat_w, dtype=torch.float32, device=torch.device("cpu"), generator=seed_g).to(device)
+                            # EverAnimate: anchor stack length is N, not 1
+                            noise_extra_slots = everanim_N if everanim_mode else 1
+                            noise = torch.randn(16, latent_window_size + noise_extra_slots, lat_h, lat_w, dtype=torch.float32, device=torch.device("cpu"), generator=seed_g).to(device)
                             seq_len = math.ceil((noise.shape[2] * noise.shape[3]) / 4 * noise.shape[1])
 
-                            if current_ref_images is not None or bg_images is not None or ref_latent is not None:
+                            if everanim_mode:
+                                # ── EverAnimate image_cond_in build ─────────
+                                # Composition along temporal dim (dim=1):
+                                #   [0:N]         anchor stack from embeds.ref_latent
+                                #                  (mask=1, latent=user/selected anchors)
+                                #   [N:N+M]       motion slots:
+                                #                  iter 0 → mask=0, latent=zeros
+                                #                  iter >0 → mask=1, latent=everanim_prev_last_latent
+                                #   [N+M:]        denoise region: mask=0, latent=zeros
+                                # Total temporal length = noise.shape[1].
+                                if offload:
+                                    offload_transformer(transformer, remove_lora=False)
+                                    offloaded = True
+                                T_total = noise.shape[1]
+                                # ref_latent comes in as [20, N, h, w] from embeds.
+                                anchor_block = ref_latent.to(device, dtype) if ref_latent is not None else torch.zeros(20, everanim_N, lat_h, lat_w, device=device, dtype=dtype)
+
+                                T_remaining = T_total - everanim_N
+                                if T_remaining < everanim_M:
+                                    raise RuntimeError(
+                                        f"EverAnimate: window too small for N={everanim_N} + M={everanim_M} "
+                                        f"(latent slots available after anchors: {T_remaining})"
+                                    )
+
+                                # Motion block
+                                if start == 0 or everanim_prev_last_latent is None:
+                                    motion_mask = torch.zeros(4, everanim_M, lat_h, lat_w, device=device, dtype=dtype)
+                                    motion_lat = torch.zeros(16, everanim_M, lat_h, lat_w, device=device, dtype=dtype)
+                                else:
+                                    motion_mask = torch.ones(4, everanim_M, lat_h, lat_w, device=device, dtype=dtype)
+                                    motion_lat = everanim_prev_last_latent.to(device, dtype)
+                                motion_block = torch.cat([motion_mask, motion_lat], dim=0)  # [20, M, h, w]
+
+                                # Denoise region (mask=0, latent=zeros)
+                                T_denoise = T_remaining - everanim_M
+                                denoise_block = torch.zeros(20, T_denoise, lat_h, lat_w, device=device, dtype=dtype)
+
+                                image_cond_in = torch.cat([anchor_block, motion_block, denoise_block], dim=1)
+                                del anchor_block, motion_block, denoise_block, motion_mask, motion_lat
+                            elif current_ref_images is not None or bg_images is not None or ref_latent is not None:
                                 if offload:
                                     offload_transformer(transformer, remove_lora=False)
                                     offloaded = True
@@ -2433,11 +2496,29 @@ class WanVideoSampler:
                                 offload_transformer(transformer, remove_lora=False)
                                 offloaded = True
 
+                            # EverAnimate: capture motion memory BEFORE decode
+                            # (latent-space chunk carry — paper convention)
+                            if everanim_mode and everanim_M > 0:
+                                everanim_prev_last_latent = latent[:, -everanim_M:].detach().clone()
+
                             vae.to(device)
-                            videos = vae.decode(latent[:, 1:].unsqueeze(0).to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False)[0].cpu()
+                            # Decode skips the anchor latents at the head of the
+                            # window. Vanilla path skips 1; everanimate skips N.
+                            decode_skip = everanim_N if everanim_mode else 1
+                            videos = vae.decode(latent[:, decode_skip:].unsqueeze(0).to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False)[0].cpu()
                             del latent
 
-                            if start != 0 or current_ref_images is not None:
+                            if everanim_mode:
+                                # After decode_skip removed the anchor latents,
+                                # the first M motion latents decode into
+                                # (M-1)*4 + 1 RGB frames due to Wan VAE causal
+                                # compression. Those represent the previous
+                                # chunk's tail (duplicate content); drop them
+                                # on every iteration after the first.
+                                if start != 0 and everanim_M > 0:
+                                    trim_rgb = (everanim_M - 1) * 4 + 1
+                                    videos = videos[:, trim_rgb:]
+                            elif start != 0 or current_ref_images is not None:
                                 videos = videos[:, refert_num:]
 
                             sampling_pbar.close()
@@ -2454,7 +2535,10 @@ class WanVideoSampler:
                                 videos = torch.stack(cm_result_list, dim=0).permute(3, 0, 1, 2)
                                 del cm_result_list
 
-                            current_ref_images = videos[:, -refert_num:].clone().detach()
+                            # EverAnimate skips the RGB carry — state is in
+                            # everanim_prev_last_latent (already extracted).
+                            if not everanim_mode:
+                                current_ref_images = videos[:, -refert_num:].clone().detach()
 
                             # optionally save generated samples to disk
                             # if output_path:
