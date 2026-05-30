@@ -128,7 +128,7 @@ class MultiTalkModelLoader:
 def loudness_norm(audio_array, sr=16000, lufs=-23):
     try:
         import pyloudnorm
-    except:
+    except Exception:
         raise ImportError("pyloudnorm package is not installed")
     meter = pyloudnorm.Meter(sr)
     loudness = meter.integrated_loudness(audio_array)

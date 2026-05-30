@@ -85,7 +85,7 @@ def get_previewer(device, latent_format):
                 taesd = TAEHV(comfy.utils.load_torch_file(taehv_path)).to(device)
                 previewer = TAESDPreviewerImpl(taesd)
                 previewer = WrappedPreviewer(previewer, rate=16)
-            except:
+            except Exception:
                 log.info("Could not find TAEW model file 'taew2_1.safetensors' from models/vae_approx. You can download it from https://huggingface.co/Kijai/WanVideo_comfy/blob/main/taew2_1.safetensors")
                 log.info("Using Latent2RGB previewer instead.")
                 method = LatentPreviewMethod.Latent2RGB

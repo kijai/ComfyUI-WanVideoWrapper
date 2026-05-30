@@ -200,7 +200,7 @@ def pose_extract(pose_images, ref_image, dwpose_model, height, width, score_thre
     if ref_image is not None:
         try:
             pose_ref = dwpose_model(ref_image.squeeze(0), score_threshold=score_threshold)
-        except:
+        except Exception:
             raise ValueError("No pose detected in reference image")
     prev_pose = None
     for img in tqdm(pose_images, desc="Pose Extraction", unit="image", total=len(pose_images)):
@@ -208,7 +208,7 @@ def pose_extract(pose_images, ref_image, dwpose_model, height, width, score_thre
             pose = dwpose_model(img, score_threshold=score_threshold)
             if handle_not_detected == "repeat":
                 prev_pose = pose
-        except:
+        except Exception:
             if prev_pose is not None:
                 pose = prev_pose
             else:
@@ -675,7 +675,7 @@ def pose_extract(pose_images, ref_image, dwpose_model, height, width, score_thre
                                                     draw_body=draw_body, draw_hands=draw_hands, hand_keypoint_size=hand_keypoint_size,
                                                     draw_feet=draw_feet, body_keypoint_size=body_keypoint_size, draw_head=draw_head)
         result = torch.from_numpy(dwpose_woface)
-        #except:
+        #except Exception:
         #    result = torch.zeros((height, width, 3), dtype=torch.uint8)
         dwpose_woface_list.append(result)
     dwpose_woface_tensor = torch.stack(dwpose_woface_list, dim=0)

@@ -10,7 +10,7 @@ from contextlib import nullcontext
 
 try:
     from ..radial_attention.attn_mask import RadialSpargeSageAttn, RadialSpargeSageAttnDense, MaskMap
-except:
+except Exception:
     pass
 
 from .attention import attention

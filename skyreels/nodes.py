@@ -548,7 +548,7 @@ class WanVideoDiffusionForcingSampler:
         gc.collect()
         try:
             torch.cuda.reset_peak_memory_stats(device)
-        except:
+        except Exception:
             pass
 
         #region main loop start
@@ -615,7 +615,7 @@ class WanVideoDiffusionForcingSampler:
         try:
             print_memory(device)
             torch.cuda.reset_peak_memory_stats(device)
-        except:
+        except Exception:
             pass
 
         return ({

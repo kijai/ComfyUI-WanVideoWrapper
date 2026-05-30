@@ -31,7 +31,7 @@ def check_jit_script_function():
                     f"  Qualified name: {qualname}\n"
                     f"  Defined in: {code_file}:{code_line}\n"
                     f"This may cause issues with the NLF model.")
-        except:
+        except Exception:
             log.warning("--------------------------------")
             log.warning(f"torch.jit.script function is: {torch.jit.script.__name__} from module {module}, "
                     f"this has been modified by another custom node. This may cause issues with the NLF model.")

@@ -167,7 +167,7 @@ class FantasyTalkingWav2VecEmbeds:
 
         try:
             audio_segment = audio_input[start_sample:end_sample]
-        except:
+        except Exception:
             audio_segment = audio_input
 
         print("audio_segment.shape", audio_segment.shape)

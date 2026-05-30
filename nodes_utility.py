@@ -9,7 +9,7 @@ from einops import rearrange
 
 try:
     from server import PromptServer
-except:
+except Exception:
     PromptServer = None
 
 VAE_STRIDE = (4, 8, 8)
@@ -256,7 +256,7 @@ class CreateCFGScheduleFloatList:
                     f"{cfg_list}",
                     unique_id
                 )
-            except:
+            except Exception:
                 pass
 
         return (cfg_list,)
@@ -319,7 +319,7 @@ class CreateScheduleFloatList:
                     f"{cfg_list}",
                     unique_id
                 )
-            except:
+            except Exception:
                 pass
 
         return (cfg_list,)
@@ -454,7 +454,7 @@ class NormalizeAudioLoudness:
     def loudness_norm(self, audio_array, sr=16000, lufs=-23):
         try:
             import pyloudnorm
-        except:
+        except Exception:
             raise ImportError("pyloudnorm package is not installed")
         meter = pyloudnorm.Meter(sr)
         loudness = meter.integrated_loudness(audio_array)

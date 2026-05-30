@@ -113,7 +113,7 @@ def multitalk_loop(self, **kwargs):
     try:
         silence_path = os.path.join(script_directory, "encoded_silence.safetensors")
         encoded_silence = load_torch_file(silence_path)["audio_emb"].to(dtype)
-    except:
+    except Exception:
             log.warning("No encoded silence file found, padding with end of audio embedding instead.")
 
     total_frames = len(audio_embedding[0])
@@ -564,6 +564,6 @@ def multitalk_loop(self, **kwargs):
     try:
         print_memory(device)
         torch.cuda.reset_peak_memory_stats(device)
-    except:
+    except Exception:
         pass
     return {"video": gen_video_samples.permute(1, 2, 3, 0), "output_path": output_path},

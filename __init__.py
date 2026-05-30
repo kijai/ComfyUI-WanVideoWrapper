@@ -6,7 +6,7 @@ try:
         for dir_path in duplicate_dirs:
             warning_msg += f"  - {color_text(dir_path, 'yellow')}\n"
         log.warning(color_text(warning_msg + "Please remove duplicates to avoid possible conflicts.", "red"))
-except:
+except Exception:
     pass
 
 from .utils import log

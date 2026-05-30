@@ -4,15 +4,15 @@ import torch
 try:
     from spas_sage_attn import block_sparse_sage2_attn_cuda
     sparse_attn_func = block_sparse_sage2_attn_cuda
-except:
+except Exception:
     try:
         from sparse_sageattn import sparse_sageattn
         sparse_attn_func = sparse_sageattn
-    except:
+    except Exception:
         try:
             from .sparse_sage.core import sparse_sageattn
             sparse_attn_func = sparse_sageattn
-        except:
+        except Exception:
             sparse_sageattn = None
             raise ImportError("sparse_sageattn is not available. Please install the sparse_sageattn package or check your import path.")
 

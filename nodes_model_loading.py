@@ -23,7 +23,7 @@ from comfy.sd import load_lora_for_models
 try:
     from .gguf.gguf import _replace_with_gguf_linear, GGUFParameter
     from gguf import GGMLQuantizationType
-except:
+except Exception:
     pass
 
 script_directory = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +33,7 @@ offload_device = mm.unet_offload_device()
 
 try:
     from server import PromptServer
-except:
+except Exception:
     PromptServer = None
 
 attention_modes = ["sdpa", "flash_attn_2", "flash_attn_3", "sageattn", "sageattn_3", "radial_sage_attention", "sageattn_compiled",
@@ -414,7 +414,7 @@ class WanVideoLoraSelect:
 
         try:
             lora_path = folder_paths.get_full_path_or_raise("loras", lora)
-        except:
+        except Exception:
             lora_path = lora
 
         # Load metadata from the safetensors file
@@ -1151,7 +1151,7 @@ class WanVideoModelLoader:
             try:
                 if hasattr(torch.backends.cuda.matmul, "allow_fp16_accumulation"):
                     torch.backends.cuda.matmul.allow_fp16_accumulation = False
-            except:
+            except Exception:
                 pass
 
 
@@ -1512,12 +1512,24 @@ class WanVideoModelLoader:
                     block.cross_attn.ip_adapter_single_stream_v_proj = nn.Linear(context_dim, dim, bias=False)
 
         # LongCat Avatar
-        if "multitalk_audio_proj.proj1.weight" in sd and "blocks.0.audio_cross_attn.q_norm.weight" in sd:
+        proj1_key = "multitalk_audio_proj.proj1.weight" if "multitalk_audio_proj.proj1.weight" in sd \
+                    else "multitalk_audio_proj.proj1.weight_int8" if "multitalk_audio_proj.proj1.weight_int8" in sd \
+                    else None
+        if proj1_key is not None and ("blocks.0.audio_cross_attn.q_norm.weight" in sd or "blocks.0.audio_cross_attn.q_norm.weight_int8" in sd):
             log.info("MultiTalk/InfiniteTalk model detected, patching model...")
             from .multitalk.multitalk import AudioProjModel
             from .wanvideo.modules.model import WanLayerNorm
             from .LongCat.layers import SingleStreamAttention
 
+            # Detect LongCat-Avatar audio encoder variant from proj1 input dim:
+            #   v1.0 (wav2vec2): seq_len * blocks * channels = 5 * 12 * 768 = 46080
+            #   v1.5 (whisper):  seq_len * blocks * channels = 5 *  5 * 1280 = 32000
+            proj1_in = sd[proj1_key].shape[1]
+            if proj1_in == 32000:
+                audio_proj_blocks, audio_proj_channels = 5, 1280
+                log.info("LongCat-Avatar-1.5 (Whisper) audio proj detected")
+            else:
+                audio_proj_blocks, audio_proj_channels = 12, 768
 
             for block in transformer.blocks:
                 with init_empty_weights():
@@ -1534,7 +1546,7 @@ class WanVideoModelLoader:
                         class_interval=4,
                         attention_mode=attention_mode,
                     )
-                    multitalk_proj_model = AudioProjModel()
+                    multitalk_proj_model = AudioProjModel(blocks=audio_proj_blocks, channels=audio_proj_channels)
             transformer.multitalk_audio_proj = multitalk_proj_model
         # SkyreelsV3
         elif "blocks.1.audio_cross_attn.kv_linear.weight" in sd and "audio_proj.proj1.weight" in sd:
