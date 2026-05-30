@@ -1,3 +1,4 @@
+# Licensed under the Apache License, Version 2.0
 import os, gc, math
 import torch
 import torch.nn.functional as F
@@ -1211,7 +1212,7 @@ class WanVideoAnimateEmbeds:
                 "transition_video": ("IMAGE", {"default": None, "tooltip": "Transition video frames (32 images, encoded to 8 latent frames). Acts as hard conditioning guide for seamless connection."}),
                 "prefix_frames": ("IMAGE", {"default": None, "tooltip": "3 reference images. Expands canvas by 17 pixel frames, encoded together with bg frames. Image 0 ×5, image 1 ×4, image 2 ×4, image 0 ×4. Shifts pose/face by 17 frames."}),
                 "tiled_vae": ("BOOLEAN", {"default": False, "tooltip": "Use tiled VAE encoding for reduced memory use"}),
-                "Prefix & Transition_video by wuwukasi (BiliBili)": ("BOOLEAN", {"default": True, "tooltip": "Informational only. Prefix and Transition_video improvements by wuwukasi (Bilibili)."}),
+                "Prefix & Transition Video by wuwukasi(bilibili)": ("BOOLEAN", {"default": True, "label_on": "ON", "label_off": "ON"}),
             }
         }
 
@@ -1264,7 +1265,7 @@ class WanVideoAnimateEmbeds:
                 log.warning("Both transition_video and start_ref_image provided. Using transition_video only (loop disabled).")
         # ============ Prefix frames: expand canvas and shift control signals ============
         if prefix_frames is not None:
-            # Expand canvas: always 37 = 17 prefix + 20 reserve (for optional transition)
+            # Expand canvas: always 37 = 17 prefix + 12 transition + 8 reserve
             extra = 37
             num_frames += extra
             # Trim 1-3 frames from end to keep num_frames % 4 == 1 (required by repeat_interleave + view)
@@ -1374,19 +1375,19 @@ class WanVideoAnimateEmbeds:
             if prefix_pixel_data is not None:
                 resized_bg_images[:, :actual_prefix_px] = prefix_pixel_data.to(device, dtype=resized_bg_images.dtype)
                 log.info(f"Prefix: replaced first {actual_prefix_px} pixel frames of black canvas")
-                # If transition_video also present, embed last 20 frames into canvas positions 17-37
+                # If transition_video also present, embed last 12 frames into canvas positions 25-37
                 if transition_video is not None:
                     tv = transition_video  # [B, H, W, C]
                     b_tv = tv.shape[0]
-                    if b_tv >= 20:
-                        tv = tv[-20:]
+                    if b_tv >= 12:
+                        tv = tv[-12:]
                     else:
-                        tv = torch.cat([tv[0:1].repeat(20 - b_tv, 1, 1, 1), tv], dim=0)
+                        tv = torch.cat([tv[0:1].repeat(12 - b_tv, 1, 1, 1), tv], dim=0)
                     if tv.shape[1] != H or tv.shape[2] != W:
                         tv = common_upscale(tv.movedim(-1, 1), W, H, "lanczos", "disabled").movedim(1, -1)
-                    tv = tv.permute(3, 0, 1, 2)[:3] * 2 - 1  # [C, 20, H, W]
-                    resized_bg_images[:, 17:37] = tv.to(device, dtype=resized_bg_images.dtype)
-                    log.info("Prefix+Transition: embedded last 20 transition frames into canvas positions 17-37")
+                    tv = tv.permute(3, 0, 1, 2)[:3] * 2 - 1  # [C, 12, H, W]
+                    resized_bg_images[:, 25:37] = tv.to(device, dtype=resized_bg_images.dtype)
+                    log.info("Prefix+Transition: embedded last 12 transition frames into canvas positions 25-37")
             # ==========================================================================
 
             # ============ Transition (no prefix): embed into canvas first 21 frames ============
@@ -1440,7 +1441,7 @@ class WanVideoAnimateEmbeds:
             prefix_T = 0
             if prefix_frames is not None and looping:
                 vae.to(device)
-                prefix_latent = vae.encode([prefix_pixel_data.to(device, vae.dtype).unsqueeze(0)], device, tiled=tiled_vae)[0]
+                prefix_latent = vae.encode([prefix_pixel_data.to(device, vae.dtype)], device, tiled=tiled_vae)[0]
                 prefix_T = prefix_latent.shape[1]
                 prefix_msk = torch.ones(4, prefix_T, lat_h, lat_w, device=offload_device, dtype=vae.dtype)
                 prefix_latent_masked = torch.cat([prefix_msk, prefix_latent.to(offload_device)], dim=0)  # [20, prefix_T, ...]
@@ -1463,7 +1464,7 @@ class WanVideoAnimateEmbeds:
             if prefix_frames is not None:
                 bg_mask[:, :actual_prefix_px] = 1.0  # only actual prefix pixel frames
                 if transition_video is not None:
-                    bg_mask[:, 17:37] = 1.0
+                    bg_mask[:, 25:37] = 1.0
             # ======= Transition (no prefix): set mask=1 for first 21 pixel frames =======
             elif transition_video is not None:
                 bg_mask[:, :21] = 1.0

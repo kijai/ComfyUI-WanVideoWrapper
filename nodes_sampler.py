@@ -1880,6 +1880,8 @@ class WanVideoSampler:
                         # ============================================
                         counter = torch.zeros_like(latent_model_input, device=device)
                         noise_pred = torch.zeros_like(latent_model_input, device=device)
+                        if image_cond is not None and image_cond.ndim > 1:
+                            latent_video_length = min(latent_video_length, image_cond.shape[1])
                         context_queue = list(context(idx, steps, latent_video_length, context_frames, context_stride, context_overlap))
                         fraction_per_context = 1.0 / len(context_queue)
                         context_pbar = ProgressBar(steps)
