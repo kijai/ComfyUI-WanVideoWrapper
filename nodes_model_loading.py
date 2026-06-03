@@ -11,6 +11,7 @@ from .wanvideo.modules.t5 import T5EncoderModel
 from .wanvideo.modules.clip import CLIPModel
 from .wanvideo.wan_video_vae import WanVideoVAE, WanVideoVAE38
 from .custom_linear import _replace_linear
+from .comfy_quant_linear import is_comfy_quant_state_dict, replace_with_comfy_quant_linear
 
 from accelerate import init_empty_weights
 from .utils import set_module_tensor_to_device, get_module_memory_mb_per_device
@@ -811,6 +812,7 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
     param_count = sum(1 for _ in transformer.named_parameters())
     pbar = ProgressBar(param_count)
     block_idx = vace_block_idx = None
+    comfy_quant = is_comfy_quant_state_dict(sd)
 
     if gguf:
         log.info("Using GGUF to load and assign model weights to device...")
@@ -864,6 +866,10 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
             transformer.gguf_patched = True
     else:
         log.info("Loading and assigning model weights to device...")
+        if comfy_quant and not getattr(transformer, "comfy_quant_patched", False):
+            log.info("ComfyUI-native quantized checkpoint detected (NVFP4/FP8 mixed); reconstructing QuantizedTensor weights...")
+            replace_with_comfy_quant_linear(transformer, sd, base_dtype, transformer_load_device)
+            transformer.comfy_quant_patched = True
     named_params = transformer.named_parameters()
 
     for name, param in tqdm(named_params,
@@ -890,6 +896,9 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
             continue
 
         key = name.replace("_orig_mod.", "")
+        if comfy_quant and (key.rsplit(".", 1)[0] + ".comfy_quant") in sd:
+            pbar.update(1)  # weight already reconstructed as a QuantizedTensor above
+            continue
         value=sd[key]
         keep_fp32 = ["patch_embedding", "motion_encoder", "condition_embedding"]
 
@@ -1597,7 +1606,11 @@ class WanVideoModelLoader:
             sd.update(extra_sd)
             del extra_sd
 
-        sd = {k.replace(".weight_scale", ".scale_weight"): v for k, v in sd.items()}
+        # ComfyUI-native quantized checkpoints (NVFP4/FP8 mixed) keep their own
+        # `.weight_scale`/`.weight_scale_2` names; don't rename them to the fp8-scaled
+        # `.scale_weight` convention or the comfy_quant loader can't find them.
+        if not is_comfy_quant_state_dict(sd):
+            sd = {k.replace(".weight_scale", ".scale_weight"): v for k, v in sd.items()}
 
         # FlashVSR
         if "LQ_proj_in.norm1.gamma" in sd:
