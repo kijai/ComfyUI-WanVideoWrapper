@@ -19,7 +19,7 @@ class Wav2VecModelLoader:
         return {
             "required": {
                 "model": (folder_paths.get_filename_list("wav2vec2"), {"tooltip": "These models are loaded from the 'ComfyUI/models/wav2vec2' -folder",}),
-                "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16"}),
+                "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16", "tooltip": "Computation/storage dtype for the wav2vec2 model weights; fp16 is the safe default, fp32 is most accurate but uses more VRAM"}),
                 "load_device": (["main_device", "offload_device"], {"default": "main_device", "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"}),
             },
            
@@ -150,19 +150,19 @@ class MultiTalkWav2VecEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "wav2vec_model": ("WAV2VECMODEL",),
-            "audio_1": ("AUDIO",),
-            "normalize_loudness": ("BOOLEAN", {"default": True, "tooltip": "Normalize the audio loudness to -23 LUFS"}),
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 1, "tooltip": "The total frame count to generate."}),
-            "fps": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 60.0, "step": 0.1}),
-            "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the audio conditioning"}),
+            "wav2vec_model": ("WAV2VECMODEL", {"tooltip": "Loaded wav2vec2 audio encoder used to extract per-frame audio features — connect from Wav2VecModelLoader"}),
+            "audio_1": ("AUDIO", {"tooltip": "Primary speaker audio waveform; resampled to 16 kHz and trimmed to num_frames / fps seconds before encoding"}),
+            "normalize_loudness": ("BOOLEAN", {"default": True, "tooltip": "Normalize the audio loudness to -23 LUFS before encoding so quiet and loud clips drive the lips with similar strength"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 1, "tooltip": "Total frame count to generate; audio is trimmed to num_frames / fps seconds"}),
+            "fps": ("FLOAT", {"default": 25.0, "min": 1.0, "max": 60.0, "step": 0.1, "tooltip": "Frames per second of the output video — used to align the wav2vec embeddings to the video timeline"}),
+            "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the audio conditioning applied to the cross-attention; higher = more pronounced lip motion, 1.0 is the trained default"}),
             "audio_cfg_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "When not 1.0, an extra model pass without audio conditioning is done: slower inference but more motion is allowed"}),
             "multi_audio_type": (["para", "add"], {"default": "para", "tooltip": "'para' overlay speakers in parallel, 'add' concatenate sequentially"}),
         },
             "optional" : {
-                "audio_2": ("AUDIO",),
-                "audio_3": ("AUDIO",),
-                "audio_4": ("AUDIO",),
+                "audio_2": ("AUDIO", {"tooltip": "Optional second speaker audio; combined with audio_1 via multi_audio_type ('para' overlay or 'add' sequential)"}),
+                "audio_3": ("AUDIO", {"tooltip": "Optional third speaker audio; combined with the other tracks via multi_audio_type"}),
+                "audio_4": ("AUDIO", {"tooltip": "Optional fourth speaker audio; combined with the other tracks via multi_audio_type"}),
                 "ref_target_masks": ("MASK", {"tooltip": "Per-speaker semantic mask(s) in pixel space. Supply one mask per speaker (plus optional background) to guide mouth assignment"}),
                 "add_noise_floor": ("BOOLEAN", {"default": False, "tooltip": "Add a low-level noise floor to the audio to reduce silent gaps"}),
                 "smooth_transients": ("BOOLEAN", {"default": False, "tooltip": "Apply a low-pass filter to the audio to smooth out transients"}),
@@ -351,7 +351,7 @@ class MultiTalkSilentEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 1, "tooltip": "The total frame count to generate."}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 1, "tooltip": "Total frame count to generate; the encoded-silence embedding is tiled/cropped to this length"}),
         },
         }
 
@@ -381,9 +381,9 @@ class WanVideoImageToVideoMultiTalk:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "vae": ("WANVAE",),
-            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Width of the generation"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Height of the generation"}),
+            "vae": ("WANVAE", {"tooltip": "Loaded Wan VAE used to encode start_image into latent space — connect from WanVideoVAELoader"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Output width in pixels; should be a multiple of 8 and match a resolution the base model was trained on"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Output height in pixels; should be a multiple of 8 and match a resolution the base model was trained on"}),
             "frame_window_size": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "The number of frames to process at once, should be a value the model is generally good at."}),
             "motion_frame": ("INT", {"default": 25, "min": 1, "max": 10000, "step": 1, "tooltip": "Driven frame length used in the long video generation. Basically the overlap length."}),
             "force_offload": ("BOOLEAN", {"default": False, "tooltip": "Whether to force offload the model within the loop for VAE operations, enable if you encounter memory issues."}),
@@ -401,9 +401,9 @@ class WanVideoImageToVideoMultiTalk:
             },),
             },
             "optional": {
-                "start_image": ("IMAGE", {"tooltip": "Images to encode"}),
+                "start_image": ("IMAGE", {"tooltip": "Starting frame for the first window; resized to width × height, range-shifted to [-1,1] and used as the visual anchor for MultiTalk/InfiniteTalk long-video sampling"}),
                 "tiled_vae": ("BOOLEAN", {"default": False, "tooltip": "Use tiled VAE encoding for reduced memory use"}),
-                "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "Clip vision encoded image"}),
+                "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "CLIP vision encoded reference image used for the model's clip_context — connect from WanVideoClipVisionEncode"}),
                 "mode": ([
                     "auto",
                     "multitalk",
@@ -466,9 +466,9 @@ class WanVideoImageToVideoSkyreelsv3_audio:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "vae": ("WANVAE",),
-            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Width of the generation"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Height of the generation"}),
+            "vae": ("WANVAE", {"tooltip": "Loaded Wan VAE used to encode start_image into latent space — connect from WanVideoVAELoader"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Output width in pixels; should be a multiple of 8 and match a resolution the base model was trained on"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Output height in pixels; should be a multiple of 8 and match a resolution the base model was trained on"}),
             "frame_window_size": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "The number of frames to process at once, should be a value the model is generally good at."}),
             "motion_frame": ("INT", {"default": 5, "min": 1, "max": 10000, "step": 1, "tooltip": "Driven frame length used in the long video generation. Basically the overlap length."}),
             "drop_frames": ("INT", {"default": 12, "min": 0, "max": 10000, "step": 1, "tooltip": "Additional frames to drop when advancing the audio window. Higher values = less overlap = faster generation but potentially less smooth transitions."}),
@@ -489,9 +489,9 @@ class WanVideoImageToVideoSkyreelsv3_audio:
             },),
             },
             "optional": {
-                "start_image": ("IMAGE", {"tooltip": "Images to encode"}),
+                "start_image": ("IMAGE", {"tooltip": "Starting frame for the first window; resized to width × height, range-shifted to [-1,1] and used as the visual anchor for SkyReels v3 audio-driven sampling"}),
                 "reference_video": ("IMAGE", {"tooltip": "Optional: Pre-generated reference video to use for keyframes instead of extracting from first generation. Should be color-matched to source image."}),
-                "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "Clip vision encoded image"}),
+                "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "CLIP vision encoded reference image used for the model's clip_context — connect from WanVideoClipVisionEncode"}),
                 "output_path": ("STRING", {"default": "", "tooltip": "If set, will save each window's resulting frames to this folder, also DISABLES returning the final video tensor to save memory"}),
             }
         }

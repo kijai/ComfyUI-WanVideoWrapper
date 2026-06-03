@@ -17,8 +17,8 @@ class WanVideoControlnetLoader:
             "required": {
                 "model": (folder_paths.get_filename_list("controlnet"), {"tooltip": "These models are loaded from the 'ComfyUI/models/controlnet' -folder",}),
 
-            "base_precision": (["fp32", "bf16", "fp16"], {"default": "bf16"}),
-            "quantization": (['disabled', 'fp8_e4m3fn', 'fp8_e4m3fn_fast', 'fp8_e5m2', 'fp8_e4m3fn_fast_no_ffn'], {"default": 'disabled', "tooltip": "optional quantization method"}),
+            "base_precision": (["fp32", "bf16", "fp16"], {"default": "bf16", "tooltip": "Compute dtype for non-quantized weights (norms, time/text/image embeddings, head); bf16 is the usual default"}),
+            "quantization": (['disabled', 'fp8_e4m3fn', 'fp8_e4m3fn_fast', 'fp8_e5m2', 'fp8_e4m3fn_fast_no_ffn'], {"default": 'disabled', "tooltip": "Optional fp8 quantization of the controlnet weights to reduce VRAM; *_fast variants use matmul tricks, e5m2 has wider range, disabled keeps base_precision"}),
             "load_device": (["main_device", "offload_device"], {"default": "main_device", "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"}),
             },
         }
@@ -125,13 +125,13 @@ class WanVideoControlnetApply:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model": ("WANVIDEOMODEL", ),
-                "controlnet": ("WANVIDEOCONTROLNET", ),
-                "control_images": ("IMAGE", ),
-                "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.0001, "tooltip": "controlnet strength"}),
-                "control_stride": ("INT", {"default": 3, "min": 1, "max": 8, "step": 1, "tooltip": "controlnet stride"}),
-                "control_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the steps to apply controlnet"}),
-                "control_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the steps to apply controlnet"}),
+                "model": ("WANVIDEOMODEL",  {"tooltip": "Wan video diffusion model to patch with controlnet guidance — connect from WanVideoModelLoader"}),
+                "controlnet": ("WANVIDEOCONTROLNET",  {"tooltip": "Loaded Wan controlnet weights — connect from WanVideoControlnetLoader"}),
+                "control_images": ("IMAGE",  {"tooltip": "Per-frame control signal images (e.g. depth, pose, canny) driving the controlnet"}),
+                "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.0001, "tooltip": "Multiplier on the controlnet residual added to the diffusion model; 1.0 is baseline, lower softens guidance, higher overdrives it"}),
+                "control_stride": ("INT", {"default": 3, "min": 1, "max": 8, "step": 1, "tooltip": "Apply the controlnet every Nth transformer block; lower = more guidance + more VRAM/compute, higher = lighter touch"}),
+                "control_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Fraction of total sampling steps at which controlnet guidance starts applying (0.0 = from step 0, 1.0 = never)"}),
+                "control_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Fraction of total sampling steps at which controlnet guidance stops applying (1.0 = through the final step)"}),
                }
         }
 

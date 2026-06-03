@@ -14,14 +14,14 @@ class WanVideoWanDrawWanMoveTracks:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "images": ("IMAGE",),
-                    "tracks": ("TRACKS",),
+                    "images": ("IMAGE", {"tooltip": "Per-frame video frames to overlay the WanMove tracks onto for visualization"}),
+                    "tracks": ("TRACKS", {"tooltip": "WanMove tracks dictionary (track_path + track_visibility) — connect from WanVideoAddWanMoveTracks or compatible producer"}),
                 },
                 "optional": {
                     "line_resolution": ("INT", {"default": 24, "min": 4, "max": 64, "step": 1, "tooltip": "Number of points to use for each line segment"}),
                     "circle_size": ("INT", {"default": 10, "min": 1, "max": 20, "step": 1, "tooltip": "Size of the circle to draw for each track point"}),
                     "opacity": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Opacity of the circle to draw for each track point"}),
-                    "line_width": ("INT", {"default": 14, "min": 1, "max": 50, "step": 1, "tooltip": "Width of the line to draw for each track"}),
+                    "line_width": ("INT", {"default": 14, "min": 1, "max": 50, "step": 1, "tooltip": "Pixel width of the path line drawn between consecutive track points across frames"}),
                 }
         }
 
@@ -50,11 +50,11 @@ class WanVideoAddWanMoveTracks:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "image_embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Strength of the reference embedding"}),
+                    "image_embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Base image embeds to extend with WanMove track-position guidance — connect from a WanVideo*Embeds producer"}),
+                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Multiplier on the WanMove track-position feature map injected into the diffusion conditioning; 0 disables motion control"}),
                 },
                 "optional": {
-                    "track_mask": ("MASK",),
+                    "track_mask": ("MASK", {"tooltip": "Optional per-frame mask whose nonzero pixels mark visible track points; takes precedence over track visibility from a TRACKS input"}),
                     "track_coords": ("STRING", {"forceInput": True, "tooltip": "JSON string or list of JSON strings representing the tracks"}),
                     "tracks": ("TRACKS", {"tooltip": "Alternatively use Comfy Tracks dictionary"}),
                 }
@@ -148,11 +148,11 @@ class WanMove_native:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "positive": ("CONDITIONING",),
+            "positive": ("CONDITIONING", {"tooltip": "Positive CONDITIONING containing a concat_latent_image whose feature map will be overridden by the WanMove track positions"}),
             "track_coords": ("STRING", {"forceInput": True, "tooltip": "JSON string or list of JSON strings representing the tracks"}),
             },
             "optional": {
-                "track_mask": ("MASK",),
+                "track_mask": ("MASK", {"tooltip": "Optional per-frame mask whose nonzero pixels define track visibility; when omitted all tracks are treated as visible"}),
             }
         }
 

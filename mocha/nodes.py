@@ -86,14 +86,14 @@ class MochaEmbeds:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "vae": ("WANVAE",),
-                "force_offload": ("BOOLEAN", {"default": True}),
-                "input_video": ("IMAGE", {"tooltip": "Input video to encode"}),
-                "mask": ("MASK", {"tooltip": "mask"}),
-                "ref1": ("IMAGE", {"tooltip": "Image to encode"}),
+                "vae": ("WANVAE", {"tooltip": "Loaded Wan VAE used to encode input_video and ref images into latent space — connect from WanVideoVAELoader"}),
+                "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Offload the VAE to CPU after encoding the reference / input video latents; reduces VRAM at the cost of an extra device transfer"}),
+                "input_video": ("IMAGE", {"tooltip": "Source video frames (B,H,W,C) to be edited; range-shifted to [-1,1] and VAE-encoded as the base latent stream for MoCha"}),
+                "mask": ("MASK", {"tooltip": "Per-frame edit mask aligned with input_video; downsampled to latent resolution and binarized so masked regions are regenerated, unmasked regions are preserved"}),
+                "ref1": ("IMAGE", {"tooltip": "Primary reference image used as the identity / appearance anchor; VAE-encoded and concatenated to the latent stream"}),
             },
             "optional": {
-                "ref2": ("IMAGE", {"tooltip": "Image to encode"}),
+                "ref2": ("IMAGE", {"tooltip": "Optional second reference image; VAE-encoded and appended after ref1 for multi-reference identity blending"}),
                 "tiled_vae": ("BOOLEAN", {"default": False, "tooltip": "Use tiled VAE encoding for reduced memory use"}),
             }
         }

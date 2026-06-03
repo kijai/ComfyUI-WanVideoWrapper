@@ -22,10 +22,10 @@ class WanVideoImageResizeToClosest:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "image": ("IMAGE", {"tooltip": "Image to resize"}),
-            "generation_width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Width of the image to encode"}),
-            "generation_height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Height of the image to encode"}),
-            "aspect_ratio_preservation": (["keep_input", "stretch_to_new", "crop_to_new"],),
+            "image": ("IMAGE", {"tooltip": "Input image (or batch) to resize to the closest VAE-stride-aligned resolution that fits the given W/H budget"}),
+            "generation_width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Target generation width in pixels; final size is rounded to the nearest VAE-stride-aligned resolution that fits the given pixel budget"}),
+            "generation_height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Target generation height in pixels; final size is rounded to the nearest VAE-stride-aligned resolution that fits the given pixel budget"}),
+            "aspect_ratio_preservation": (["keep_input", "stretch_to_new", "crop_to_new"], {"tooltip": "How to reconcile the input image's aspect ratio with the target W/H — keep_input preserves source AR, stretch_to_new forces target AR, crop_to_new center-crops to target AR"}),
             },
         }
 
@@ -101,16 +101,16 @@ class WanVideoVACEStartToEndFrame:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
-            "empty_frame_level": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "White level of empty frame to use"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Total length of the output frame batch; step of 4 matches the VAE temporal stride"}),
+            "empty_frame_level": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Greyscale fill value for unfilled frames between start and end (0=black, 0.5=mid-grey, 1=white)"}),
             },
             "optional": {
-                "start_image": ("IMAGE",),
-                "end_image": ("IMAGE",),
-                "control_images": ("IMAGE",),
-                "inpaint_mask": ("MASK", {"tooltip": "Inpaint mask to use for the empty frames"}),
-                "start_index": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1, "tooltip": "Index to start from"}),
-                "end_index": ("INT", {"default": -1, "min": -10000, "max": 10000, "step": 1, "tooltip": "Index to end at"}),
+                "start_image": ("IMAGE", {"tooltip": "First-frame anchor image placed at start_index in the output batch (single image)"}),
+                "end_image": ("IMAGE", {"tooltip": "Last-frame anchor image placed at end_index in the output batch (single image); the frames between start and end are filled with empty_frame_level grey"}),
+                "control_images": ("IMAGE", {"tooltip": "Optional per-frame control image batch — if longer than num_frames it is truncated, if shorter it is padded with empty_frame_level grey"}),
+                "inpaint_mask": ("MASK", {"tooltip": "Per-frame inpaint mask for VACE; mask=1 marks unfilled (to be inpainted) frames, mask=0 marks anchor frames that should be preserved"}),
+                "start_index": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1, "tooltip": "Frame index at which the start_image is placed in the output batch (0 = first frame)"}),
+                "end_index": ("INT", {"default": -1, "min": -10000, "max": 10000, "step": 1, "tooltip": "Frame index at which the end_image is placed; negative indexes from the end (-1 = last frame)"}),
             },
         }
 
@@ -203,12 +203,12 @@ class CreateCFGScheduleFloatList:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "steps": ("INT", {"default": 30, "min": 2, "max": 1000, "step": 1, "tooltip": "Number of steps to schedule cfg for"} ),
-            "cfg_scale_start": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 30.0, "step": 0.01, "round": 0.01, "tooltip": "CFG scale to use for the steps"}),
-            "cfg_scale_end": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 30.0, "step": 0.01, "round": 0.01, "tooltip": "CFG scale to use for the steps"}),
+            "steps": ("INT", {"default": 30, "min": 2, "max": 1000, "step": 1, "tooltip": "Total sampler steps the schedule will cover; must match the sampler's step count"} ),
+            "cfg_scale_start": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 30.0, "step": 0.01, "round": 0.01, "tooltip": "CFG value at the schedule's start_percent; interpolated toward cfg_scale_end across the active range"}),
+            "cfg_scale_end": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 30.0, "step": 0.01, "round": 0.01, "tooltip": "CFG value at the schedule's end_percent; interpolated from cfg_scale_start across the active range"}),
             "interpolation": (["linear", "ease_in", "ease_out"], {"default": "linear", "tooltip": "Interpolation method to use for the cfg scale"}),
-            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "round": 0.01,"tooltip": "Start percent of the steps to apply cfg"}),
-            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "round": 0.01,"tooltip": "End percent of the steps to apply cfg"}),
+            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "round": 0.01,"tooltip": "Fraction of total steps where the CFG schedule begins (0.0–1.0); steps before this fall back to CFG=1.0"}),
+            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "round": 0.01,"tooltip": "Fraction of total steps where the CFG schedule ends (0.0–1.0); steps after this fall back to CFG=1.0"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -265,13 +265,13 @@ class CreateScheduleFloatList:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "steps": ("INT", {"default": 30, "min": 2, "max": 1000, "step": 1, "tooltip": "Number of steps to schedule cfg for"} ),
-            "start_value": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 100.0, "step": 0.01, "round": 0.01, "tooltip": "CFG scale to use for the steps"}),
-            "end_value": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 100.0, "step": 0.01, "round": 0.01, "tooltip": "CFG scale to use for the steps"}),
-            "default_value": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1000.0, "step": 0.01, "round": 0.01, "tooltip": "Default value to use for the steps"}),
+            "steps": ("INT", {"default": 30, "min": 2, "max": 1000, "step": 1, "tooltip": "Total sampler steps the schedule will cover; must match the consumer's step count"} ),
+            "start_value": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 100.0, "step": 0.01, "round": 0.01, "tooltip": "Value at the schedule's start_percent; interpolated toward end_value across the active range"}),
+            "end_value": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 100.0, "step": 0.01, "round": 0.01, "tooltip": "Value at the schedule's end_percent; interpolated from start_value across the active range"}),
+            "default_value": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1000.0, "step": 0.01, "round": 0.01, "tooltip": "Value used for steps outside the start_percent..end_percent range"}),
             "interpolation": (["linear", "ease_in", "ease_out"], {"default": "linear", "tooltip": "Interpolation method to use for the cfg scale"}),
-            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "round": 0.01,"tooltip": "Start percent of the steps to apply cfg"}),
-            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "round": 0.01,"tooltip": "End percent of the steps to apply cfg"}),
+            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "round": 0.01,"tooltip": "Fraction of total steps where the schedule begins (0.0–1.0); steps before this use default_value"}),
+            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "round": 0.01,"tooltip": "Fraction of total steps where the schedule ends (0.0–1.0); steps after this use default_value"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -329,7 +329,7 @@ class DummyComfyWanModelObject:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "shift": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01, "tooltip": "Sigma shift value"}),
+            "shift": ("FLOAT", {"default": 1.0, "min": -100.0, "max": 100.0, "step": 0.01, "tooltip": "Sigma shift parameter for the dummy model_sampling; controls timestep scaling when feeding BasicScheduler to extract sigmas"}),
             }
         }
 
@@ -354,7 +354,7 @@ class WanVideoLatentReScale:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "samples": ("LATENT",),
+                    "samples": ("LATENT", {"tooltip": "Latent samples to rescale between native ComfyUI and WanVideoWrapper VAE value ranges (16-channel Wan 2.1 / 48-channel Wan 2.2)"}),
                     "direction": (["comfy_to_wrapper", "wrapper_to_comfy"], {"tooltip": "Direction to rescale latents, from comfy to wrapper or vice versa"}),
                 }
                 }
@@ -411,7 +411,7 @@ class WanVideoSigmaToStep:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                "sigma": ("FLOAT", {"default": 0.9, "min": 0.0, "max": 1.0, "step": 0.001}),
+                "sigma": ("FLOAT", {"default": 0.9, "min": 0.0, "max": 1.0, "step": 0.001, "tooltip": "Sigma threshold value (0.0–1.0); the node passes this through as an INT, letting you wire sigma values into sampler start/end_step sockets"}),
             },
         }
 
@@ -428,8 +428,8 @@ class NormalizeAudioLoudness:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "audio": ("AUDIO",),
-            "lufs": ("FLOAT", {"default": -23.0, "min": -100.0, "max": 0.0, "step": 0.1, "tool": "Loudness Units relative to Full Scale, higher LUFS values (closer to 0) mean louder audio. Lower LUFS values (more negative) mean quieter audio."}),
+            "audio": ("AUDIO", {"tooltip": "Audio waveform to normalize to the target integrated loudness (LUFS) using pyloudnorm"}),
+            "lufs": ("FLOAT", {"default": -23.0, "min": -100.0, "max": 0.0, "step": 0.1, "tool": "Loudness Units relative to Full Scale, higher LUFS values (closer to 0) mean louder audio. Lower LUFS values (more negative) mean quieter audio.", "tooltip": "Target loudness in LUFS (Loudness Units relative to Full Scale); higher values (closer to 0) are louder, lower (more negative) are quieter. -23 LUFS matches EBU R128 broadcast target."}),
            },
         }
 
@@ -467,7 +467,7 @@ class WanVideoPassImagesFromSamples:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "samples": ("LATENT",),
+                    "samples": ("LATENT", {"tooltip": "WanVideoSampler output containing an already-decoded video tensor (Multi/InfiniteTalk pipelines decode in-sampler and stash the frames in the samples dict)"}),
                 }
                 }
 
@@ -672,12 +672,12 @@ class DrawGaussianNoiseOnImage:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "image": ("IMAGE", ),
-                    "mask": ("MASK", ),
+                    "image": ("IMAGE",  {"tooltip": "Source image batch — masked (subject) pixels are preserved, unmasked (background) pixels are replaced with Gaussian noise matched to the subject's per-channel mean/std"}),
+                    "mask": ("MASK",  {"tooltip": "Subject mask (1 = keep pixel, 0 = fill with noise); resized to image HxW if needed"}),
                   },
                   "optional": {
-                    "device": (["cpu", "gpu"], {"default": "cpu", "tooltip": "Device to use for processing"}),
-                    "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                    "device": (["cpu", "gpu"], {"default": "cpu", "tooltip": "Where to run the noise generation — cpu is slower but avoids VRAM use, gpu is faster"}),
+                    "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "Random seed for the Gaussian noise generator; same seed produces the same noise pattern"}),
                 }
         }
 
@@ -762,7 +762,7 @@ class WanVideoPreviewEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Image conditioning bundle to inspect — exposes the encoded image_embeds latent and any mask inside, for debug-preview wiring"}),
                 }
         }
 

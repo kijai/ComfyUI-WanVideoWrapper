@@ -50,17 +50,17 @@ class WanVideoAddS2VEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "frame_window_size": ("INT", {"default": 80, "min": 1, "max": 100000, "step": 1, "tooltip": "Number of frames in a single window"}),
-                    "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1, "tooltip": "Scale factor for audio embeddings"}),
-                    "pose_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percentage for pose embeddings"}),
-                    "pose_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percentage for pose embeddings"})
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing Wan image-embeds bundle to extend with S2V audio/pose conditioning — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / any other embeds producer"}),
+                    "frame_window_size": ("INT", {"default": 80, "min": 1, "max": 100000, "step": 1, "tooltip": "Number of frames per S2V audio window; audio embeddings are bucketed to this size and stepped across the generation"}),
+                    "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1, "tooltip": "Strength of the audio conditioning applied to the cross-attention; higher = more pronounced audio-driven motion, 1.0 is the trained default"}),
+                    "pose_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start of the denoising schedule (0–1) at which the pose_latent conditioning becomes active"}),
+                    "pose_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End of the denoising schedule (0–1) after which the pose_latent conditioning is dropped"})
                 },
                 "optional": {
-                    "audio_encoder_output": ("AUDIO_ENCODER_OUTPUT",),
-                    "ref_latent": ("LATENT",),
-                    "pose_latent": ("LATENT",),
-                    "vae": ("WANVAE",),
+                    "audio_encoder_output": ("AUDIO_ENCODER_OUTPUT", {"tooltip": "Encoded audio features from a Wan 2.2 S2V audio encoder; carries the multi-layer hidden states used to drive audio-conditioned motion"}),
+                    "ref_latent": ("LATENT", {"tooltip": "Optional VAE-encoded reference image latent for identity anchoring; produced by WanVideoEncode or WanVideoEncodeLatentBatch"}),
+                    "pose_latent": ("LATENT", {"tooltip": "Optional VAE-encoded pose-control video latent (e.g. DWPose render); gated by pose_start_percent / pose_end_percent during sampling"}),
+                    "vae": ("WANVAE", {"tooltip": "Loaded Wan VAE; carried through the embeds bundle so the sampler can decode S2V-internal latents on demand — connect from WanVideoVAELoader"}),
                     "enable_framepack": ("BOOLEAN", {"default": False, "tooltip": "Enable Framepack sampling loop, not compatible with context windows"})
                 }
         }

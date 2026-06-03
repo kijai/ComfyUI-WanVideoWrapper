@@ -7,9 +7,9 @@ class WanVideoTeaCache:
             "required": {
                 "rel_l1_thresh": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.001,
                                             "tooltip": "Higher values will make TeaCache more aggressive, faster, but may cause artifacts. Good value range for 1.3B: 0.05 - 0.08, for other models 0.15-0.30"}),
-                "start_step": ("INT", {"default": 1, "min": 0, "max": 9999, "step": 1, "tooltip": "Start percentage of the steps to apply TeaCache"}),
-                "end_step": ("INT", {"default": -1, "min": -1, "max": 9999, "step": 1, "tooltip": "End steps to apply TeaCache"}),
-                "cache_device": (["main_device", "offload_device"], {"default": "offload_device", "tooltip": "Device to cache to"}),
+                "start_step": ("INT", {"default": 1, "min": 0, "max": 9999, "step": 1, "tooltip": "First sampler step at which TeaCache may skip; earlier steps always run in full so motion isn't lost"}),
+                "end_step": ("INT", {"default": -1, "min": -1, "max": 9999, "step": 1, "tooltip": "Last sampler step at which TeaCache may skip, -1 means until the end of sampling"}),
+                "cache_device": (["main_device", "offload_device"], {"default": "offload_device", "tooltip": "Where the cached step outputs are stored — offload_device saves VRAM, main_device is faster"}),
                 "use_coefficients": ("BOOLEAN", {"default": True, "tooltip": "Use calculated coefficients for more accuracy. When enabled therel_l1_thresh should be about 10 times higher than without"}),
             },
             "optional": {
@@ -53,10 +53,10 @@ class WanVideoMagCache:
         return {
             "required": {
                 "magcache_thresh": ("FLOAT", {"default": 0.02, "min": 0.0, "max": 0.3, "step": 0.001, "tooltip": "How strongly to cache the output of diffusion model. This value must be non-negative."}),
-                "magcache_K": ("INT", {"default": 4, "min": 0, "max": 6, "step": 1, "tooltip": "The maxium skip steps of MagCache."}),
-                "start_step": ("INT", {"default": 1, "min": 0, "max": 9999, "step": 1, "tooltip": "Step to start applying MagCache"}),
-                "end_step": ("INT", {"default": -1, "min": -1, "max": 9999, "step": 1, "tooltip": "Step to end applying MagCache"}),
-                "cache_device": (["main_device", "offload_device"], {"default": "offload_device", "tooltip": "Device to cache to"}),
+                "magcache_K": ("INT", {"default": 4, "min": 0, "max": 6, "step": 1, "tooltip": "Maximum number of consecutive steps MagCache is allowed to skip; higher = more aggressive caching"}),
+                "start_step": ("INT", {"default": 1, "min": 0, "max": 9999, "step": 1, "tooltip": "First sampler step at which MagCache may skip; earlier steps always run in full"}),
+                "end_step": ("INT", {"default": -1, "min": -1, "max": 9999, "step": 1, "tooltip": "Last sampler step at which MagCache may skip, -1 means until the end of sampling"}),
+                "cache_device": (["main_device", "offload_device"], {"default": "offload_device", "tooltip": "Where the cached step outputs are stored — offload_device saves VRAM, main_device is faster"}),
             },
         }
     RETURN_TYPES = ("CACHEARGS",)
@@ -88,9 +88,9 @@ class WanVideoEasyCache:
         return {
             "required": {
                 "easycache_thresh": ("FLOAT", {"default": 0.015, "min": 0.0, "max": 1.0, "step": 0.001, "tooltip": "How strongly to cache the output of diffusion model. This value must be non-negative."}),
-                "start_step": ("INT", {"default": 10, "min": 0, "max": 9999, "step": 1, "tooltip": "Step to start applying EasyCache"}),
-                "end_step": ("INT", {"default": -1, "min": -1, "max": 9999, "step": 1, "tooltip": "Step to end applying EasyCache"}),
-                "cache_device": (["main_device", "offload_device"], {"default": "offload_device", "tooltip": "Device to cache to"}),
+                "start_step": ("INT", {"default": 10, "min": 0, "max": 9999, "step": 1, "tooltip": "First sampler step at which EasyCache may skip; earlier steps always run in full"}),
+                "end_step": ("INT", {"default": -1, "min": -1, "max": 9999, "step": 1, "tooltip": "Last sampler step at which EasyCache may skip, -1 means until the end of sampling"}),
+                "cache_device": (["main_device", "offload_device"], {"default": "offload_device", "tooltip": "Where the cached step outputs are stored — offload_device saves VRAM, main_device is faster"}),
             },
         }
     RETURN_TYPES = ("CACHEARGS",)
