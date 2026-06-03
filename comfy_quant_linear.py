@@ -55,15 +55,24 @@ def _build_quantized_tensor(sd, prefix, device, compute_dtype, out_features, in_
     layout = get_layout_class(layout_name)
 
     weight = sd[prefix + "weight"].to(device=device, dtype=qcfg["storage_t"])
+    # Derive the LOGICAL shape from the packed weight, not from module.in_features:
+    # NVFP4 packs two FP4 values per uint8 byte, so the stored weight is
+    # (out, in/2). When a model's Linear was instantiated from the checkpoint's
+    # packed weight shape, module.in_features is the *packed* width (in/2) for NVFP4
+    # — using it for orig_shape makes dequantize yield a half-width tensor and the
+    # matmul fails. FP8 stores one value per byte so packed == logical (that path was
+    # always fine). Compute orig_shape from qdata + the format's packing factor.
+    out_f = weight.shape[0]
+    in_f = weight.shape[1] * (2 if fmt == "nvfp4" else 1)
     if fmt == "nvfp4":
         ts = sd[prefix + "weight_scale_2"].to(device=device)
         bs = sd[prefix + "weight_scale"].to(device=device).view(dtype=torch.float8_e4m3fn)
         params = layout.Params(scale=ts, block_scale=bs, orig_dtype=compute_dtype,
-                               orig_shape=(out_features, in_features))
+                               orig_shape=(out_f, in_f))
     else:  # float8_e4m3fn / float8_e5m2
         sc = sd[prefix + "weight_scale"].to(device=device)
         params = layout.Params(scale=sc, orig_dtype=compute_dtype,
-                               orig_shape=(out_features, in_features))
+                               orig_shape=(out_f, in_f))
     return QuantizedTensor(weight, layout_name, params), fmt
 
 
@@ -91,4 +100,18 @@ def replace_with_comfy_quant_linear(model, sd, compute_dtype, load_device, prefi
             if module.bias is not None and bias_key in sd:
                 module.bias = nn.Parameter(sd[bias_key].to(device=load_device, dtype=compute_dtype), requires_grad=False)
             module._comfy_quant_format = fmt
+
+            # WanVideoWrapper's CustomLinear routes through a registered custom op
+            # (torch.ops.wanvideo.linear_forward) for torch.compile compatibility, but
+            # a custom-op boundary strips tensor subclasses -> the QuantizedTensor's
+            # __torch_dispatch__ never fires and the raw packed NVFP4 bytes leak into
+            # F.linear (wrong shape). Route quantized layers through the DIRECT path,
+            # where plain F.linear -> aten.linear.default dispatches to comfy_kitchen's
+            # NVFP4/FP8 GEMM. Also clear scale_weight (the scale lives in the
+            # QuantizedTensor) and the gguf flag.
+            if hasattr(module, "_linear_forward_direct"):
+                module._linear_forward_impl = module._linear_forward_direct
+                module.scale_weight = None
+                module.is_gguf = False
+
     return model

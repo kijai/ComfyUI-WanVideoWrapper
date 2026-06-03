@@ -237,7 +237,12 @@ class CustomLinear(nn.Linear):
         return weight
 
     def _prepare_weight(self, input):
-        """Prepare weight tensor - handles both regular and GGUF weights"""
+        """Prepare weight tensor - handles regular, GGUF and comfy-quant (NVFP4/FP8) weights"""
+        if getattr(self, "_comfy_quant_format", None) is not None:
+            # ComfyUI-native QuantizedTensor: keep it intact so F.linear ->
+            # aten.linear.default dispatches to comfy_kitchen's NVFP4/FP8 GEMM.
+            # A `.to(input)` here would collapse it to its packed _qdata and break dispatch.
+            return self.weight
         if self.is_gguf:
             weight = dequantize_gguf_tensor(self.weight).to(self.compute_dtype)
         else:

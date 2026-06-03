@@ -1606,7 +1606,11 @@ class WanVideoModelLoader:
             sd.update(extra_sd)
             del extra_sd
 
-        sd = {k.replace(".weight_scale", ".scale_weight"): v for k, v in sd.items()}
+        # ComfyUI-native quantized checkpoints (NVFP4/FP8 mixed) keep their own
+        # `.weight_scale`/`.weight_scale_2` names; don't rename them to the fp8-scaled
+        # `.scale_weight` convention or the comfy_quant loader can't find them.
+        if not is_comfy_quant_state_dict(sd):
+            sd = {k.replace(".weight_scale", ".scale_weight"): v for k, v in sd.items()}
 
         # FlashVSR
         if "LQ_proj_in.norm1.gamma" in sd:
