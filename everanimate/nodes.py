@@ -105,10 +105,11 @@ class WanVideoEverAnimateEmbeds:
                 "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8}),
                 "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4}),
                 "force_offload": ("BOOLEAN", {"default": True}),
-                "frame_window_size": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 1,
-                    "tooltip": "RGB frames per sampler window. Set num_frames > frame_window_size "
-                               "to trigger auto long-generation (sampler internally loops with "
-                               "EverAnimate convention: N-slot anchor + M-slot motion + latent carry)."}),
+                "frame_window_size": ("INT", {"default": 77, "min": 1, "max": 10000, "step": 1,
+                    "tooltip": "RGB frames per sampler window. Default 77 matches EverAnimate's "
+                               "trained clip length (frames_per_clip=77 → 20 content latents). "
+                               "Set num_frames > frame_window_size to trigger auto long-generation "
+                               "(sampler loops with N-slot anchor + M-slot motion + latent carry)."}),
                 "colormatch": (
                     ["disabled", "mkl", "hm", "reinhard", "mvgd", "hm-mvgd-hm", "hm-mkl-hm"],
                     {"default": "disabled"},
