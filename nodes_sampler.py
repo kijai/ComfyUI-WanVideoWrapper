@@ -564,6 +564,7 @@ class WanVideoSampler:
 
         # MultiTalk
         multitalk_audio_embeds = audio_emb_slice = audio_features_in = None
+        multitalk_audio_stride = None
         multitalk_embeds = image_embeds.get("multitalk_embeds", multitalk_embeds)
 
         if multitalk_embeds is not None:
