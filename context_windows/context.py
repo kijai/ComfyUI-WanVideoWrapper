@@ -235,11 +235,12 @@ def create_window_mask(noise_pred_context, c, latent_video_length, context_overl
     return window_mask
 
 class WindowTracker:
-    def __init__(self, verbose=False):
+    def __init__(self, verbose=False, max_windows=64):
         self.window_map = {}  # Maps frame sequence to persistent ID
         self.next_id = 0
         self.cache_states = {}  # Maps persistent ID to teacache state
         self.verbose = verbose
+        self.max_windows = max_windows
     
     def get_window_id(self, frames):
         key = tuple(sorted(frames))  # Order-independent frame sequence
@@ -248,6 +249,13 @@ class WindowTracker:
             if self.verbose:
                 log.info(f"New window pattern {key} -> ID {self.next_id}")
             self.next_id += 1
+            # Prevent unbounded growth if many unique window patterns are used
+            if len(self.window_map) > self.max_windows:
+                oldest_key = next(iter(self.window_map))
+                oldest_id = self.window_map.pop(oldest_key)
+                self.cache_states.pop(oldest_id, None)
+                if self.verbose:
+                    log.info(f"Evicted oldest window pattern {oldest_key} (ID {oldest_id})")
         return self.window_map[key]
     
     def get_teacache(self, window_id, base_state):

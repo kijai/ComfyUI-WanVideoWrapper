@@ -1,7 +1,7 @@
 import os
 import torch
 import gc
-from ..utils import log, print_memory, fourier_filter, optimized_scale, setup_radial_attention, compile_model
+from ..utils import log, print_memory, fourier_filter, optimized_scale, setup_radial_attention, compile_model, reopen_gguf_readers
 import math
 from tqdm import tqdm
 
@@ -19,7 +19,7 @@ import comfy.model_management as mm
 from comfy.utils import ProgressBar
 from comfy.cli_args import args, LatentPreviewMethod
 from ..nodes_model_loading import load_weights
-from ..nodes_sampler import offload_transformer, init_blockswap
+from ..nodes_sampler import offload_transformer, init_blockswap, _weights_load_signature
 from ..custom_linear import remove_lora_from_module, set_lora_params, _replace_linear
 
 device = mm.get_torch_device()
@@ -171,23 +171,47 @@ class WanVideoDiffusionForcingSampler:
         vae_upscale_factor = 16 if is_5b else 8
 
         # Load weights
-        if not transformer.patched_linear and patcher.model["sd"] is not None and len(patcher.patches) != 0:
-            transformer = _replace_linear(transformer, dtype, patcher.model["sd"], compile_args=model["compile_args"])
+        if not transformer.patched_linear and len(patcher.patches) != 0:
+            transformer = _replace_linear(transformer, dtype, patcher.model["sd"], patches=patcher.patches, scale_weights=patcher.model.get("scale_weights", None), compile_args=model["compile_args"])
             transformer.patched_linear = True
-        if patcher.model["sd"] is not None and gguf_reader is None:
-            load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device, block_swap_args=block_swap_args)
+
+        load_sig = _weights_load_signature(model, patcher, transformer, block_swap_args, device, weight_dtype, dtype, gguf_reader)
+        weights_offloaded = getattr(transformer, "_wan_weights_offloaded", False)
+        weights_already_loaded = (getattr(transformer, "_wan_weights_load_signature", None) == load_sig) and not weights_offloaded
+        if not weights_already_loaded:
+            if gguf_reader is not None: #handle GGUF
+                reopen_gguf_readers(gguf_reader)
+                load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True, reader=gguf_reader, block_swap_args=block_swap_args)
+            else:
+                load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device, block_swap_args=block_swap_args)
+            transformer._wan_weights_load_signature = load_sig
+            transformer._wan_weights_offloaded = False
+        else:
+            log.info("SkyReels: transformer weights already loaded with matching configuration, skipping load_weights")
+
+        if patcher.model["sd"] is not None:
+            log.info("SkyReels: releasing patcher.model['sd'] to free memory")
+            patcher.model["sd"] = None
+            gc.collect()
+            mm.soft_empty_cache()
 
         if gguf_reader is not None: #handle GGUF
-            load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True, reader=gguf_reader, block_swap_args=block_swap_args)
-            set_lora_params_gguf(transformer, patcher.patches)
+            set_lora_params_gguf(transformer, patcher.patches, force_cpu=True)
             transformer.patched_linear = True
         elif len(patcher.patches) != 0: #handle patched linear layers (unmerged loras, fp8 scaled)
             log.info(f"Using {len(patcher.patches)} LoRA weight patches for WanVideo model")
             if not merge_loras and fp8_matmul:
                 raise NotImplementedError("FP8 matmul with unmerged LoRAs is not supported")
-            set_lora_params(transformer, patcher.patches)
+            set_lora_params(transformer, patcher.patches, force_cpu=True)
         else:
             remove_lora_from_module(transformer) #clear possible unmerged lora weights
+
+        # Free the original LoRA tensors in patcher.patches now that
+        # set_lora_params has copied all diffs into CustomLinear modules.
+        if len(patcher.patches) > 0:
+            patcher.patches.clear()
+            gc.collect()
+            mm.soft_empty_cache()
 
         transformer.lora_scheduling_enabled = transformer_options.get("lora_scheduling_enabled", False)
 
@@ -548,7 +572,7 @@ class WanVideoDiffusionForcingSampler:
         gc.collect()
         try:
             torch.cuda.reset_peak_memory_stats(device)
-        except Exception:
+        except:
             pass
 
         #region main loop start
@@ -615,7 +639,7 @@ class WanVideoDiffusionForcingSampler:
         try:
             print_memory(device)
             torch.cuda.reset_peak_memory_stats(device)
-        except Exception:
+        except:
             pass
 
         return ({

@@ -19,7 +19,7 @@ from ..custom_linear import _replace_linear, set_lora_params, CustomLinear
 def _replace_with_gguf_linear(model, compute_dtype, state_dict, prefix="", modules_to_not_convert=[], patches=None, compile_args=None):
     return _replace_linear(model, compute_dtype, state_dict, prefix, patches, None, compile_args, modules_to_not_convert)
 
-def set_lora_params_gguf(module, patches, module_prefix="", device=torch.device("cpu")):
-    return set_lora_params(module, patches, module_prefix, device)
+def set_lora_params_gguf(module, patches, module_prefix="", device=torch.device("cpu"), force_cpu=False, _diag=None):
+    return set_lora_params(module, patches, module_prefix, device, force_cpu, _diag=_diag)
 
 GGUFLinear = CustomLinear
