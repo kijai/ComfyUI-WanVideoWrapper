@@ -6,7 +6,7 @@ import numpy as np
 from ..latent_preview import prepare_callback
 from ..wanvideo.schedulers import get_scheduler
 from .multitalk import timestep_transform, add_noise
-from ..utils import log, print_memory, temporal_score_rescaling, offload_transformer, init_blockswap, match_and_blend_colors
+from ..utils import log, print_memory, temporal_score_rescaling, offload_transformer, init_blockswap, match_and_blend_colors, reopen_gguf_readers
 from comfy.utils import load_torch_file
 from ..nodes_model_loading import load_weights
 from ..HuMo.nodes import get_audio_emb_window
@@ -21,6 +21,27 @@ script_directory = os.path.dirname(os.path.abspath(__file__))
 
 device = mm.get_torch_device()
 offload_device = mm.unet_offload_device()
+
+def _weights_load_signature(model, patcher, transformer, block_swap_args, device, weight_dtype, base_dtype, gguf_reader):
+    """Return a hashable signature describing the current weight-load configuration.
+
+    Used to skip redundant full-model load_weights() calls when the model has
+    already been loaded with identical settings in a previous execution.
+    """
+    try:
+        compile_args = model["compile_args"]
+    except KeyError:
+        compile_args = None
+    return (
+        str(device),
+        str(weight_dtype),
+        str(base_dtype),
+        str(block_swap_args) if block_swap_args is not None else None,
+        str(compile_args) if compile_args is not None else None,
+        gguf_reader is not None,
+        getattr(transformer, "patched_linear", False),
+        len(patcher.patches),
+    )
 
 def multitalk_loop(self, **kwargs):
     # Unpack kwargs into local variables
@@ -113,7 +134,7 @@ def multitalk_loop(self, **kwargs):
     try:
         silence_path = os.path.join(script_directory, "encoded_silence.safetensors")
         encoded_silence = load_torch_file(silence_path)["audio_emb"].to(dtype)
-    except Exception:
+    except:
             log.warning("No encoded silence file found, padding with end of audio embedding instead.")
 
     total_frames = len(audio_embedding[0])
@@ -343,13 +364,27 @@ def multitalk_loop(self, **kwargs):
             del motion_add_noise, add_latent
 
         if offloaded:
-            # Load weights
-            if transformer.patched_linear and gguf_reader is None:
-                load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device, block_swap_args=block_swap_args)
-            elif gguf_reader is not None: #handle GGUF
-                load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True, reader=gguf_reader, block_swap_args=block_swap_args)
+            # Load weights (only if configuration changed or weights were offloaded)
+            offloaded_sig = _weights_load_signature(model, patcher, transformer, block_swap_args, device, weight_dtype, dtype, gguf_reader)
+            offloaded_loaded = (getattr(transformer, "_wan_weights_load_signature", None) == offloaded_sig) and not getattr(transformer, "_wan_weights_offloaded", False)
+            if not offloaded_loaded:
+                if gguf_reader is not None: #handle GGUF
+                    reopen_gguf_readers(gguf_reader)
+                    load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True, reader=gguf_reader, block_swap_args=block_swap_args)
+                else:
+                    load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device, block_swap_args=block_swap_args)
+                transformer._wan_weights_load_signature = offloaded_sig
+                transformer._wan_weights_offloaded = False
             #blockswap init
             init_blockswap(transformer, block_swap_args, model)
+
+        # Release the original state dict if still present (main sampler usually does this earlier,
+        # but keep it here for entry points that call multitalk_loop directly).
+        if patcher.model.get("sd") is not None:
+            log.info("MultiTalk: releasing patcher.model['sd'] to free memory")
+            patcher.model["sd"] = None
+            gc.collect()
+            mm.soft_empty_cache()
 
         # Use the appropriate prompt for this section
         if len(text_embeds["prompt_embeds"]) > 1:
@@ -564,6 +599,6 @@ def multitalk_loop(self, **kwargs):
     try:
         print_memory(device)
         torch.cuda.reset_peak_memory_stats(device)
-    except Exception:
+    except:
         pass
     return {"video": gen_video_samples.permute(1, 2, 3, 0), "output_path": output_path},

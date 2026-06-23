@@ -7,18 +7,16 @@ from pathlib import Path
 import gc
 import types, collections
 from comfy.utils import ProgressBar, copy_to_param, set_attr_param
-from comfy.model_patcher import get_key_weight
+from comfy.model_patcher import get_key_weight, string_to_seed
 from comfy.lora import calculate_weight
-
-try:
-    from comfy.utils import string_to_seed
-except Exception:
-    from comfy.model_patcher import string_to_seed
 
 from comfy.float import stochastic_rounding
 from .custom_linear import remove_lora_from_module
 import folder_paths
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Only configure logging if the root logger has no handlers, to avoid overriding
+# ComfyUI's or other extensions' logging setup.
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 log = logging.getLogger(__name__)
 
 import comfy.model_management as mm
@@ -27,7 +25,7 @@ offload_device = mm.unet_offload_device()
 
 try:
     from .gguf.gguf import GGUFParameter
-except Exception:
+except:
     pass
 
 COLOR_CODES = {
@@ -60,6 +58,8 @@ def offload_transformer(transformer, remove_lora=True):
     transformer.easycache_state.clear_all()
 
     if transformer.patched_linear:
+        # Offload to CPU instead of meta, so weights can be reloaded from param.data
+        # when patcher.model["sd"] has been released.
         for name, param in transformer.named_parameters():
             if "loras" in name or "controlnet" in name:
                 continue
@@ -69,11 +69,12 @@ def offload_transformer(transformer, remove_lora=True):
                 module = getattr(module, subname)
             attr_name = subnames[-1]
             if param.data.is_floating_point():
-                meta_param = torch.nn.Parameter(torch.empty_like(param.data, device='meta'), requires_grad=False)
-                setattr(module, attr_name, meta_param)
+                offloaded_param = torch.nn.Parameter(param.data.to(offload_device), requires_grad=False)
+                setattr(module, attr_name, offloaded_param)
             elif isinstance(param.data, GGUFParameter):
                 quant_type = getattr(param, 'quant_type', None)
-                setattr(module, attr_name, MetaParameter(param.data.dtype, quant_type))
+                offloaded_param = GGUFParameter(param.data.to(offload_device), quant_type=quant_type)
+                setattr(module, attr_name, offloaded_param)
             else:
                 pass
         if remove_lora:
@@ -86,38 +87,38 @@ def offload_transformer(transformer, remove_lora=True):
         if transformer.audio_model is not None and hasattr(block, 'audio_block'):
             block.audio_block = None
 
+    transformer._wan_weights_offloaded = True
     mm.soft_empty_cache()
     gc.collect()
 
 
 def init_blockswap(transformer, block_swap_args, model):
-    if not transformer.patched_linear:
-        if block_swap_args is not None:
-            for name, param in transformer.named_parameters():
-                if "block" not in name or "control_adapter" in name or "face" in name:
-                    param.data = param.data.to(device)
-                elif block_swap_args["offload_txt_emb"] and "txt_emb" in name:
-                    param.data = param.data.to(offload_device)
-                elif block_swap_args["offload_img_emb"] and "img_emb" in name:
-                    param.data = param.data.to(offload_device)
+    if block_swap_args is not None:
+        for name, param in transformer.named_parameters():
+            if "block" not in name or "control_adapter" in name or "face" in name:
+                param.data = param.data.to(device)
+            elif block_swap_args["offload_txt_emb"] and "txt_emb" in name:
+                param.data = param.data.to(offload_device)
+            elif block_swap_args["offload_img_emb"] and "img_emb" in name:
+                param.data = param.data.to(offload_device)
 
-            transformer.block_swap(
-                block_swap_args["blocks_to_swap"] - 1 ,
-                block_swap_args["offload_txt_emb"],
-                block_swap_args["offload_img_emb"],
-                vace_blocks_to_swap = block_swap_args.get("vace_blocks_to_swap", None),
-            )
-        elif model["auto_cpu_offload"]:
-            for module in transformer.modules():
-                if hasattr(module, "offload"):
-                    module.offload()
-                if hasattr(module, "onload"):
-                    module.onload()
-            for block in transformer.blocks:
-                block.modulation = torch.nn.Parameter(block.modulation.to(device))
-            transformer.head.modulation = torch.nn.Parameter(transformer.head.modulation.to(device))
-        else:
-            transformer.to(device)
+        transformer.block_swap(
+            block_swap_args["blocks_to_swap"] - 1 ,
+            block_swap_args["offload_txt_emb"],
+            block_swap_args["offload_img_emb"],
+            vace_blocks_to_swap = block_swap_args.get("vace_blocks_to_swap", None),
+        )
+    elif model["auto_cpu_offload"]:
+        for module in transformer.modules():
+            if hasattr(module, "offload"):
+                module.offload()
+            if hasattr(module, "onload"):
+                module.onload()
+        for block in transformer.blocks:
+            block.modulation = torch.nn.Parameter(block.modulation.to(device))
+        transformer.head.modulation = torch.nn.Parameter(transformer.head.modulation.to(device))
+    elif not transformer.patched_linear:
+        transformer.to(device)
 
 def check_device_same(first_device, second_device):
     if first_device.type != second_device.type:
@@ -220,6 +221,35 @@ def print_memory(device, process="Sampling"):
     #memory_summary = torch.cuda.memory_summary(device=device, abbreviated=False)
     #log.info(f"Memory Summary:\n{memory_summary}")
 
+
+def log_ram_usage(tag="", gc_collect=False):
+    """Print process RAM (RSS) usage in MB. Optionally triggers gc first."""
+    if gc_collect:
+        gc.collect()
+    try:
+        import psutil
+        proc = psutil.Process()
+        rss_mb = proc.memory_info().rss / (1024 * 1024)
+        vms_mb = proc.memory_info().vms / (1024 * 1024)
+        log.info(f"[RAM] {tag} | RSS: {rss_mb:.1f} MB | VMS: {vms_mb:.1f} MB")
+    except ImportError:
+        log.info(f"[RAM] {tag} | psutil not available, skipping RAM log")
+
+
+def log_memory_peak(tag="", device=None, reset_peak=False):
+    """Print current and peak VRAM usage in GB."""
+    if device is None:
+        device = mm.get_torch_device()
+    if not torch.cuda.is_available() or "cuda" not in str(device):
+        log.info(f"[Mem] {tag} | device={device} (non-CUDA)")
+        return
+    allocated = torch.cuda.memory_allocated(device) / 1024**3
+    reserved = torch.cuda.memory_reserved(device) / 1024**3
+    peak = torch.cuda.max_memory_allocated(device) / 1024**3
+    log.info(f"[Mem] {tag} | Allocated: {allocated:.3f} GB | Reserved: {reserved:.3f} GB | Peak: {peak:.3f} GB")
+    if reset_peak:
+        torch.cuda.reset_peak_memory_stats(device)
+
 def get_module_memory_mb(module):
     memory = 0
     for param in module.parameters():
@@ -229,12 +259,10 @@ def get_module_memory_mb(module):
 
 def get_module_memory_mb_per_device(module):
     memory_per_device = {}
-    memory = 0
     for param in module.parameters():
         if param.data is not None:
             device = str(param.device)
-            memory += param.nelement() * param.element_size()
-            memory_per_device[device] = memory_per_device.get(device, 0) + memory
+            memory_per_device[device] = memory_per_device.get(device, 0) + param.nelement() * param.element_size()
 
     memory_per_device = {dev: mem / (1024 * 1024) for dev, mem in memory_per_device.items()}
     return memory_per_device
@@ -309,7 +337,7 @@ def apply_lora(model, device_to, transformer_load_device, params_to_keep=None, d
                     key = f"{name.replace('diffusion_model.', '')}.{param}"
                     try:
                         set_module_tensor_to_device(model.model.diffusion_model, key, device=transformer_load_device, dtype=dtype_to_use, value=state_dict[key])
-                    except Exception:
+                    except:
                         continue
                 key = f"{name}.{param}"
                 if scale_weights is not None:
@@ -323,7 +351,7 @@ def apply_lora(model, device_to, transformer_load_device, params_to_keep=None, d
                 if low_mem_load:
                     try:
                         set_module_tensor_to_device(model.model.diffusion_model, key, device=transformer_load_device, dtype=dtype_to_use, value=model.model.diffusion_model.state_dict()[key])
-                    except Exception:
+                    except:
                         continue
             m.comfy_patched_weights = True
             cnt += 1
@@ -352,7 +380,7 @@ def apply_lora(model, device_to, transformer_load_device, params_to_keep=None, d
                         dtype_to_use = torch.float32
                     try:
                         set_module_tensor_to_device(model.model.diffusion_model, name, device=transformer_load_device, dtype=dtype_to_use, value=state_dict[name])
-                    except Exception:
+                    except:
                         continue
         return model
 
@@ -703,9 +731,8 @@ def check_duplicate_nodes():
 
     # Check all directories in custom_nodes
     for path in custom_nodes_dir.iterdir():
-        if (path.is_dir() and
+        if (path.is_dir() and 
             path != current_path and
-            not path.name.endswith('.disabled') and
             'wanvideo' in path.name.lower() and
             'wrapper' in path.name.lower()):
             wanvideo_dirs.append(str(path))
@@ -776,3 +803,89 @@ def match_and_blend_colors(
 
     # [0,1] -> [-1,1]
     return (blended_rgb_01 * 2.0 - 1.0)[0].to(dtype=input_dtype)
+
+
+# ---------------------------------------------------------------------------
+# GGUF reader mmap lifecycle management
+# ---------------------------------------------------------------------------
+# The GGUFReader uses np.memmap to access GGUF files. During load_weights(),
+# every tensor is read via tensor.data.copy(), which touches every page of
+# the mmap'd file. The OS caches the entire file in the process working set
+# (system RAM). For a 14B Q8 model, this adds ~14GB of system RAM usage that
+# persists as long as the reader's mmap is alive.
+#
+# These helpers close the mmap after loading to release system RAM, and
+# reopen the reader on demand for weights reload (block swap cycles).
+
+def close_gguf_readers(gguf_reader):
+    """Close memory-mapped files backing GGUF readers to release system RAM.
+
+    Saves each reader's original file path so it can be reopened later via
+    reopen_gguf_readers(). After closing, the OS releases mmap pages from
+    the process working set, dramatically reducing system RAM usage (often
+    10-15GB for large GGUF files like Wan2.1 14B Q8).
+
+    Safe to call on None or an empty list.
+    """
+    if gguf_reader is None or not gguf_reader:
+        return
+    import numpy as np
+    for r in gguf_reader:
+        if r is None:
+            continue
+        if hasattr(r, 'data') and hasattr(r.data, '_mmap'):
+            try:
+                # MUST save filename BEFORE closing — accessing .filename
+                # after _mmap.close() segfaults on some numpy versions.
+                r._gguf_filename = r.data.filename
+            except Exception:
+                r._gguf_filename = None
+            try:
+                r.data._mmap.close()
+                r._gguf_mmap_closed = True
+            except Exception:
+                pass
+    gc.collect()
+
+
+def reopen_gguf_readers(gguf_reader):
+    """Reopen GGUF readers previously closed by close_gguf_readers().
+
+    Recreates GGUFReader objects from the saved filenames. This re-parses
+    the file header and re-mmaps the file, which is necessary before
+    calling load_weights() for a weights reload (e.g. after block swap
+    offload/reload cycles).
+
+    Safe to call on None or an empty list. Readers that are still open
+    are left untouched.
+    """
+    if gguf_reader is None or not gguf_reader:
+        return
+    from gguf import GGUFReader
+    reopened = False
+    for i, r in enumerate(gguf_reader):
+        if r is not None and getattr(r, '_gguf_mmap_closed', False):
+            fname = getattr(r, '_gguf_filename', None)
+            if fname:
+                # Explicitly clean up the old reader's tensor list and
+                # data BEFORE replacement. The old reader holds 500+ numpy
+                # view objects that keep the closed mmap's C-level memory
+                # allocation alive. Clearing these prevents a phantom RAM
+                # leak of 10-15GB per reopen cycle.
+                try:
+                    if hasattr(r, 'tensors'):
+                        r.tensors.clear()
+                        del r.tensors
+                    if hasattr(r, 'data'):
+                        del r.data
+                except Exception:
+                    pass
+                try:
+                    new_reader = GGUFReader(fname)
+                    gguf_reader[i] = new_reader
+                    reopened = True
+                except Exception as e:
+                    log.warning(f"Failed to reopen GGUF reader for {fname}: {e}")
+    if reopened:
+        del r  # break loop variable reference to last replaced reader
+        gc.collect()

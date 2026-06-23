@@ -1,18 +1,19 @@
 # based on https://github.com/mit-han-lab/radial-attention/blob/main/radial_attn/attn_mask.py
 import torch
+from collections import OrderedDict
 
 try:
     from spas_sage_attn import block_sparse_sage2_attn_cuda
     sparse_attn_func = block_sparse_sage2_attn_cuda
-except Exception:
+except:
     try:
         from sparse_sageattn import sparse_sageattn
         sparse_attn_func = sparse_sageattn
-    except Exception:
+    except:
         try:
             from .sparse_sage.core import sparse_sageattn
             sparse_attn_func = sparse_sageattn
-        except Exception:
+        except:
             sparse_sageattn = None
             raise ImportError("sparse_sageattn is not available. Please install the sparse_sageattn package or check your import path.")
 
@@ -138,9 +139,10 @@ def RadialSpargeSageAttnDense(query, key, value, mask_map):
 
 @torch.compiler.disable()
 def RadialSpargeSageAttn(query, key, value, mask_map, decay_factor):
-    # Simple cache based on function arguments
+    # Simple LRU-bounded cache based on function arguments
+    _MAX_RADIAL_CACHE = 8
     if not hasattr(RadialSpargeSageAttn, "_cache"):
-        RadialSpargeSageAttn._cache = {}
+        RadialSpargeSageAttn._cache = OrderedDict()
     # print(mask_map.block_size)
     block_size = mask_map.block_size
     cache_key = (
@@ -152,6 +154,7 @@ def RadialSpargeSageAttn(query, key, value, mask_map, decay_factor):
     )
     if cache_key in RadialSpargeSageAttn._cache:
         input_mask = RadialSpargeSageAttn._cache[cache_key]
+        RadialSpargeSageAttn._cache.move_to_end(cache_key)
     else:
         print("Radial Attention: Generating block mask")
         video_mask = mask_map.queryLogMask(query.shape[0] * query.shape[1], "radial", block_size=block_size, decay_factor=decay_factor)
@@ -164,6 +167,9 @@ def RadialSpargeSageAttn(query, key, value, mask_map, decay_factor):
             mask = torch.max(reshaped_mask, dim=1).values
         input_mask = mask.unsqueeze(0).unsqueeze(1).expand(1, query.shape[-2], mask.shape[0], mask.shape[1])
         RadialSpargeSageAttn._cache[cache_key] = input_mask
+        RadialSpargeSageAttn._cache.move_to_end(cache_key)
+        while len(RadialSpargeSageAttn._cache) > _MAX_RADIAL_CACHE:
+            RadialSpargeSageAttn._cache.popitem(last=False)
 
     return sparse_attn_func(
         query[:, :, :mask_map.video_token_num, :],

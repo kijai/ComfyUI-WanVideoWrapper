@@ -9,12 +9,15 @@
 
 import numpy as np
 import torch
+from collections import OrderedDict
 
 #----------------------------------------------------------------------------
 # Variant of constant() that inherits dtype and device from the given
 # reference tensor by default.
 
-_constant_cache = dict()
+# Cache for broadcasted constant tensors, bounded by LRU to avoid unbounded growth.
+_MAX_CONSTANT_CACHE = 64
+_constant_cache = OrderedDict()
 
 
 def constant(value, shape=None, dtype=None, device=None, memory_format=None):
@@ -36,6 +39,9 @@ def constant(value, shape=None, dtype=None, device=None, memory_format=None):
             tensor, _ = torch.broadcast_tensors(tensor, torch.empty(shape))
         tensor = tensor.contiguous(memory_format=memory_format)
         _constant_cache[key] = tensor
+    _constant_cache.move_to_end(key)
+    while len(_constant_cache) > _MAX_CONSTANT_CACHE:
+        _constant_cache.popitem(last=False)
     return tensor
 
 

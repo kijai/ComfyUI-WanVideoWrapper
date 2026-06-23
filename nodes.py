@@ -1,4 +1,5 @@
 import os, gc, math
+from collections import OrderedDict
 import torch
 import torch.nn.functional as F
 import hashlib
@@ -148,8 +149,9 @@ class WanVideoBlockList:
 
 
 
-# In-memory cache for prompt extender output
-_extender_cache = {}
+# In-memory cache for prompt extender output (LRU-bounded)
+_MAX_EXTENDER_CACHE = 128
+_extender_cache = OrderedDict()
 
 cache_dir = os.path.join(script_directory, 'text_embed_cache')
 
@@ -231,6 +233,7 @@ of the original Wan templates or a custom system prompt.
             extender_key = (orig_prompt, str(extender_args))
             if extender_key in _extender_cache:
                 positive_prompt = _extender_cache[extender_key]
+                _extender_cache.move_to_end(extender_key)
                 log.info(f"Loaded extended prompt from in-memory cache: {positive_prompt}")
             else:
                 from .qwen.qwen import QwenLoader, WanVideoPromptExtender
@@ -250,6 +253,9 @@ of the original Wan templates or a custom system prompt.
                 )
                 log.info(f"Extended positive prompt: {positive_prompt}")
                 _extender_cache[extender_key] = positive_prompt
+                _extender_cache.move_to_end(extender_key)
+                while len(_extender_cache) > _MAX_EXTENDER_CACHE:
+                    _extender_cache.popitem(last=False)
                 del qwen
             pbar.update(1)
 
