@@ -15,6 +15,7 @@ local_model_path = os.path.join(folder_paths.models_dir, "nlf", "nlf_l_multi_0.3
 folder_paths.add_model_folder_path("nlf", os.path.join(folder_paths.models_dir, "nlf"))
 
 from .motion4d import SMPL_VQVAE, VectorQuantizer, Encoder, Decoder
+from .nlf_bbox import format_nlf_detected_boxes
 
 def check_jit_script_function():
     if torch.jit.script.__name__ != "script":
@@ -276,17 +277,9 @@ class NLFPredict:
             'joints3d_nonparam': [all_joints3d_nonparam],
         }
 
-        # Convert bboxes to list format: [x_min, y_min, x_max, y_max] for each detection
-        # Each box tensor is shape (1, 5) with [x_min, y_min, x_max, y_max, confidence]
-        formatted_boxes = []
-        for box in all_boxes:
-            # Handle empty detections (no person detected in frame)
-            if box.numel() == 0 or box.shape[0] == 0:
-                formatted_boxes.append([0.0, 0.0, 0.0, 0.0])
-            else:
-                # Extract first 4 values (x_min, y_min, x_max, y_max), drop confidence
-                bbox_values = box[0, :4].cpu().tolist()
-                formatted_boxes.append(bbox_values)
+        # Keep single-person frames backward compatible, but preserve all
+        # per-frame people for downstream multi-identity geometry matching.
+        formatted_boxes = format_nlf_detected_boxes(all_boxes)
 
         return (pose_results, formatted_boxes)
 

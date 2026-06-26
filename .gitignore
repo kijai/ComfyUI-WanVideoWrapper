@@ -9,6 +9,10 @@ logs/
 .idea
 tools/
 .vscode/
+.venv/
+.sessions/
 convert_*
 *.pt
 *.pth
+.pla*/
+ref*/

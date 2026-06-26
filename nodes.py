@@ -11,6 +11,10 @@ from comfy import model_management as mm
 from comfy.utils import ProgressBar, common_upscale
 from comfy.clip_vision import clip_preprocess, ClipVisionModel
 import folder_paths
+from .scail_pose2_mask_contract import (
+    build_disabled_samples_payload,
+    scail_pose2_mask_disables_samples,
+)
 
 script_directory = os.path.dirname(os.path.abspath(__file__))
 
@@ -19,8 +23,6 @@ offload_device = mm.unet_offload_device()
 
 VAE_STRIDE = (4, 8, 8)
 PATCH_SIZE = (1, 2, 2)
-
-
 class WanVideoEnhanceAVideo:
     @classmethod
     def INPUT_TYPES(s):
@@ -2236,7 +2238,7 @@ class WanVideoEncode:
     def INPUT_TYPES(s):
         return {"required": {
                     "vae": ("WANVAE",),
-                    "image": ("IMAGE",),
+                    "driving_video": ("IMAGE",),
                     "enable_vae_tiling": ("BOOLEAN", {"default": False, "tooltip": "Drastically reduces memory use but may introduce seams"}),
                     "tile_x": ("INT", {"default": 272, "min": 64, "max": 2048, "step": 1, "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"}),
                     "tile_y": ("INT", {"default": 272, "min": 64, "max": 2048, "step": 1, "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"}),
@@ -2255,10 +2257,19 @@ class WanVideoEncode:
     FUNCTION = "encode"
     CATEGORY = "WanVideoWrapper"
 
-    def encode(self, vae, image, enable_vae_tiling, tile_x, tile_y, tile_stride_x, tile_stride_y, noise_aug_strength=0.0, latent_strength=1.0, mask=None):
+    def encode(self, vae, driving_video, enable_vae_tiling, tile_x, tile_y, tile_stride_x, tile_stride_y, noise_aug_strength=0.0, latent_strength=1.0, mask=None):
+        if scail_pose2_mask_disables_samples(mask):
+            payload = build_disabled_samples_payload(mask)
+            log.info(
+                "WanVideoEncode: SCAIL-Pose2 disabled samples path "
+                f"condition_mode={payload['scail_pose2_condition_mode']} "
+                f"reason={payload['scail_pose2_disable_reason']}"
+            )
+            return (payload,)
+
         vae.to(device)
 
-        image = image.clone()
+        image = driving_video.clone()
 
         B, H, W, C = image.shape
         if W % 16 != 0 or H % 16 != 0:

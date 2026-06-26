@@ -120,6 +120,18 @@ One-to-all-Animation: https://github.com/ssj9596/One-to-All-Animation
 
 SCAIL: https://github.com/zai-org/SCAIL
 
+### SCAIL-Pose2 dual-mode samples
+
+The SCAIL-Pose2 dual-mode example can keep `WanVideoEncode.samples` connected
+to `WanVideoSampler.samples`. `replacement` keeps the samples path active so the
+sampler can use the encoded driving-video latents with the replacement denoise
+mask. `animation` and other non-replacement modes mark that samples payload as
+disabled, and the sampler ignores it before video-to-video samples handling.
+
+`add_noise_to_samples` only matters when the samples path is active. When
+SCAIL-Pose2 disables samples for non-replacement mode, that sampler option has
+no effect on the disabled payload.
+
 
 Not exactly Wan model, but close enough to work with the code base:
 

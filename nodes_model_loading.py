@@ -11,6 +11,7 @@ from .wanvideo.modules.t5 import T5EncoderModel
 from .wanvideo.modules.clip import CLIPModel
 from .wanvideo.wan_video_vae import WanVideoVAE, WanVideoVAE38
 from .custom_linear import _replace_linear
+from .SCAIL.scail2_loader import apply_scail_loader_patches
 
 from accelerate import init_empty_weights
 from .utils import set_module_tensor_to_device, get_module_memory_mb_per_device
@@ -1637,11 +1638,8 @@ class WanVideoModelLoader:
                 FactorConv3d(in_channels=in_dim_c, out_channels=in_dim_c, kernel_size=(3, 3, 3), stride=1), nn.SiLU())
             transformer.condition_embedding_align = PoseRefNetNoBNV3(in_channels_x=16, in_channels_c=16, hidden_dim=128, num_heads=8) # Frame-wise Attention Alignment Unit
 
-        # SCAIL
-        if "patch_embedding_pose.weight" in sd:
-            log.info("SCAIL model detected, patching model...")
-            pose_dim = sd["patch_embedding_pose.weight"].shape[1]
-            transformer.patch_embedding_pose = nn.Conv3d(pose_dim, dim, kernel_size=patch_size, stride=patch_size)
+        # SCAIL / SCAIL-2
+        apply_scail_loader_patches(transformer, sd, nn, dim=dim, patch_size=patch_size, log=log)
 
         if "image_to_cond.conv_in.bias" in sd:
             # One-to-all
