@@ -1766,6 +1766,14 @@ class WanVideoModelLoader:
         if vram_management_args is not None:
             if gguf:
                 raise ValueError("GGUF models don't support vram management")
+            # Transformer was created with init_empty_weights() (meta device).
+            # For the no-lora / no-scaled-quant path, load_weights() has not been
+            # called yet, so all parameters are still meta tensors.
+            # enable_vram_management wraps each module with AutoWrappedModule/Linear
+            # which calls module.to(device) — that fails on meta tensors.
+            # Fix: materialise weights from sd before wrapping.
+            if sd is not None:
+                load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device)
             from .diffsynth.vram_management import enable_vram_management, AutoWrappedModule, AutoWrappedLinear
             from .wanvideo.modules.model import WanLayerNorm
 
@@ -1790,7 +1798,15 @@ class WanVideoModelLoader:
                     offload_dtype=weight_dtype,
                     offload_device=offload_device,
                     onload_dtype=weight_dtype,
-                    onload_device=device,
+                    # Use offload_device here (not device/CUDA).
+                    # When onload_device == computation_device, AutoWrappedModule /
+                    # AutoWrappedLinear assume weights are already on onload_device
+                    # and use them directly — but our weights are on CPU (loaded via
+                    # load_weights to offload_device).  Setting onload_device = CPU
+                    # makes onload_device != computation_device, which routes forward
+                    # through the cast path (cast_to / in-place .to()), correctly
+                    # moving weights to CUDA on demand.
+                    onload_device=offload_device,
                     computation_dtype=base_dtype,
                     computation_device=device,
                 ),
@@ -1805,6 +1821,37 @@ class WanVideoModelLoader:
                 ),
                 compile_args = compile_args,
             )
+            # After wrapping, AutoWrapped* modules handle CPU↔GPU casts in
+            # forward (with the fixed layers.py).  But two categories of params
+            # are NOT wrapped and stay on CPU:
+            # 1. Raw nn.Parameter directly on blocks (e.g. self.modulation on
+            #    WanAttentionBlock) — these are added to e on CUDA → mismatch.
+            # 2. Modules explicitly excluded from wrapping by layers.py line 78:
+            #    patch_embedding, vace_patch_embedding, rope_embedder, emb_pos.
+            # Fix: find every param inside an AutoWrapped* module (those are
+            # handled by forward), then move all others to the compute device.
+            wrapped_param_ids: set = set()
+            for mod in patcher.model.diffusion_model.modules():
+                if isinstance(mod, AutoWrappedLinear):
+                    if mod.weight is not None:
+                        wrapped_param_ids.add(id(mod.weight))
+                    if mod.bias is not None:
+                        wrapped_param_ids.add(id(mod.bias))
+                elif isinstance(mod, AutoWrappedModule):
+                    for p in mod.module.parameters():
+                        wrapped_param_ids.add(id(p))
+            log.info("Moving non-AutoWrapped params (modulation, patch_embedding, …) to compute device…")
+            for n, p in patcher.model.diffusion_model.named_parameters():
+                if id(p) not in wrapped_param_ids and p.device.type != "cuda":
+                    p.data = p.data.to(device=device)
+            # Weights are managed: AutoWrapped* modules cast CPU→GPU in forward,
+            # non-wrapped params are now on CUDA.
+            # Clear sd so the sampler's load_weights call (which iterates
+            # named_parameters after wrapping, where names include '.module.')
+            # doesn't KeyError on renamed keys.
+            sd = None
+            gc.collect()
+            mm.soft_empty_cache()
 
         if merge_loras and lora is not None:
             # Skip offloading if load_device is main_device (for unified memory systems like AMD Strix Halo)
