@@ -638,7 +638,6 @@ class WanVideoSampler:
 
         if multitalk_embeds is not None:
             audio_emb_slice = multitalk_embeds.get("audio_emb_slice", None) # if already sliced
-            print("audio_emb_slice:", audio_emb_slice.shape)
             # Handle single or multiple speaker embeddings
             if audio_emb_slice is None:
                 audio_features_in = multitalk_embeds.get("audio_features", None)
