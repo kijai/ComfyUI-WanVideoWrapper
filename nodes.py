@@ -1912,7 +1912,7 @@ class WanVideoContextOptions:
     RETURN_NAMES = ("context_options",)
     FUNCTION = "process"
     CATEGORY = "WanVideoWrapper"
-    DESCRIPTION = "Context options for WanVideo, allows splitting the video into context windows and attemps blending them for longer generations than the model and memory otherwise would allow."
+    DESCRIPTION = "Context options for WanVideo, allows splitting the video into context windows and attempts blending them for longer generations than the model and memory otherwise would allow."
 
     def process(self, context_schedule, context_frames, context_stride, context_overlap, freenoise, verbose, image_cond_start_step=6, image_cond_window_count=2, vae=None, fuse_method="linear", reference_latent=None):
         context_options = {
