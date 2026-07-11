@@ -2146,7 +2146,25 @@ class WanVideoDecode:
             images = images.permute(1, 2, 3, 0).cpu().float()
             return (images,)
         else:
-            images = vae.decode(latents, device=device, end_=(end_image is not None), tiled=enable_vae_tiling, tile_size=(tile_x//8, tile_y//8), tile_stride=(tile_stride_x//8, tile_stride_y//8))[0]
+            stream_to_cpu = (
+                not enable_vae_tiling
+                and end_image is None
+                and type(getattr(vae, "model", None)).__name__ == "VideoVAE_"
+            )
+            decode_kwargs = (
+                {"output_device": "cpu", "output_dtype": torch.float32}
+                if stream_to_cpu
+                else {}
+            )
+            images = vae.decode(
+                latents,
+                device=device,
+                end_=(end_image is not None),
+                tiled=enable_vae_tiling,
+                tile_size=(tile_x//8, tile_y//8),
+                tile_stride=(tile_stride_x//8, tile_stride_y//8),
+                **decode_kwargs,
+            )[0]
 
 
         images = images.cpu().float()
@@ -2160,7 +2178,15 @@ class WanVideoDecode:
 
         if is_looped:
             temp_latents = torch.cat([latents[:, :, -3:]] + [latents[:, :, :2]], dim=2)
-            temp_images = vae.decode(temp_latents, device=device, end_=(end_image is not None), tiled=enable_vae_tiling, tile_size=(tile_x//vae.upsampling_factor, tile_y//vae.upsampling_factor), tile_stride=(tile_stride_x//vae.upsampling_factor, tile_stride_y//vae.upsampling_factor))[0]
+            temp_images = vae.decode(
+                temp_latents,
+                device=device,
+                end_=(end_image is not None),
+                tiled=enable_vae_tiling,
+                tile_size=(tile_x//vae.upsampling_factor, tile_y//vae.upsampling_factor),
+                tile_stride=(tile_stride_x//vae.upsampling_factor, tile_stride_y//vae.upsampling_factor),
+                **decode_kwargs,
+            )[0]
             temp_images = temp_images.cpu().float()
             temp_images = (temp_images - temp_images.min()) / (temp_images.max() - temp_images.min())
             images = torch.cat([temp_images[:, 9:].to(images), images[:, 5:]], dim=1)
