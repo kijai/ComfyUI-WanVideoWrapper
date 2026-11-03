@@ -19,6 +19,27 @@ def linear_interpolation(features, seq_len):
     output_features = F.interpolate(features, size=seq_len, align_corners=True, mode='linear')
     return output_features.transpose(1, 2)
 
+def _encode_recording_hidden_states(encoder, hidden_states, attention_mask, output_attentions, output_hidden_states, return_dict):
+    """Run the encoder and return its per-layer hidden states on transformers 4 and 5.
+
+    transformers 5 collects hidden states through a decorator on Wav2Vec2Model.forward, which
+    the overrides below bypass, so the encoder returns hidden_states=None. Record them with hooks
+    in transformers 4's layout instead: each layer's input, then the encoder's output."""
+    recorded, hooks = [], []
+    if output_hidden_states:
+        hooks = [layer.register_forward_pre_hook(lambda _m, args: recorded.append(args[0])) for layer in encoder.layers]
+    try:
+        outputs = encoder(hidden_states, attention_mask=attention_mask, output_attentions=output_attentions,
+                          output_hidden_states=output_hidden_states, return_dict=True)
+    finally:
+        for hook in hooks:
+            hook.remove()
+    if output_hidden_states and outputs.hidden_states is None:
+        outputs = BaseModelOutput(last_hidden_state=outputs.last_hidden_state,
+                                  hidden_states=(*recorded, outputs.last_hidden_state), attentions=outputs.attentions)
+    return outputs if return_dict else outputs.to_tuple()
+
+
 # the implementation of Wav2Vec2Model is borrowed from
 # https://github.com/huggingface/transformers/blob/HEAD/src/transformers/models/wav2vec2/modeling_wav2vec2.py
 # initialize our encoder with the pre-trained wav2vec 2.0 weights.
@@ -58,12 +79,8 @@ class Wav2Vec2Model(Wav2Vec2Model):
             hidden_states, mask_time_indices=mask_time_indices, attention_mask=attention_mask
         )
 
-        encoder_outputs = self.encoder(
-            hidden_states,
-            attention_mask=attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
+        encoder_outputs = _encode_recording_hidden_states(
+            self.encoder, hidden_states, attention_mask, output_attentions, output_hidden_states, return_dict
         )
 
         hidden_states = encoder_outputs[0]
@@ -120,12 +137,8 @@ class Wav2Vec2Model(Wav2Vec2Model):
             hidden_states, mask_time_indices=mask_time_indices, attention_mask=attention_mask
         )
 
-        encoder_outputs = self.encoder(
-            hidden_states,
-            attention_mask=attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=return_dict,
+        encoder_outputs = _encode_recording_hidden_states(
+            self.encoder, hidden_states, attention_mask, output_attentions, output_hidden_states, return_dict
         )
 
         hidden_states = encoder_outputs[0]
