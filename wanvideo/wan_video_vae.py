@@ -3,6 +3,7 @@ from einops import rearrange, repeat
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.attention import SDPBackend, sdpa_kernel
 from tqdm import tqdm
 from comfy.utils import ProgressBar
 from ..utils import print_memory, log
@@ -346,7 +347,11 @@ class AttentionBlock(nn.Module):
             0, 1, 3, 2).contiguous().chunk(3, dim=-1)
 
         # apply attention
-        x = F.scaled_dot_product_attention(q, k, v)
+        if torch.version.hip and q.shape[-1] > 256:
+            with sdpa_kernel(SDPBackend.MATH):
+                x = F.scaled_dot_product_attention(q, k, v)
+        else:
+            x = F.scaled_dot_product_attention(q, k, v)
         x = x.squeeze(1).permute(0, 2, 1).reshape(b * t, c, h, w)
 
         # output
