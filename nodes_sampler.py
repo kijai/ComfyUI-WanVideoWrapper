@@ -13,6 +13,17 @@ from .utils import(log, print_memory, apply_lora, fourier_filter, optimized_scal
 from .multitalk.multitalk_loop import multitalk_loop
 from .cache_methods.cache_methods import cache_report
 from .nodes_model_loading import load_weights
+from .SCAIL.scail2_routing import (
+    add_scail2_model_param,
+    prepare_scail2_data,
+    scail2_context_window_input,
+)
+from .scail_pose2_mask_contract import (
+    align_samples_to_latent_window,
+    apply_samples_to_noise,
+    normalize_samples_payload_for_sampler,
+    resize_noise_mask_for_latents,
+)
 from .enhance_a_video.globals import set_enhance_weight, set_num_frames
 from .WanMove.trajectory import replace_feature
 from contextlib import nullcontext
@@ -83,6 +94,12 @@ class WanVideoSampler:
         experimental_args=None, sigmas=None, unianimate_poses=None, fantasytalking_embeds=None, uni3c_embeds=None, multitalk_embeds=None, freeinit_args=None, start_step=0, end_step=-1, add_noise_to_samples=False):
         if flowedit_args is not None:
             raise Exception("FlowEdit support has been deprecated and removed due to lack of use and code maintainability")
+        samples, disabled_samples_context = normalize_samples_payload_for_sampler(samples)
+        if disabled_samples_context is not None:
+            log.info(
+                "WanVideoSampler: ignoring disabled SCAIL-Pose2 samples path "
+                f"{disabled_samples_context.to_log_fragment()}"
+            )
         patcher = model
         model = model.model
         transformer = model.diffusion_model
@@ -726,29 +743,35 @@ class WanVideoSampler:
                 if input_samples.shape[1] != noise.shape[1]:
                     input_samples = torch.cat([input_samples[:, :1].repeat(1, noise.shape[1] - input_samples.shape[1], 1, 1), input_samples], dim=1)
 
-                if add_noise_to_samples:
-                    latent_timestep = timesteps[:1].to(noise)
-                    noise = noise * latent_timestep / 1000 + (1 - latent_timestep / 1000) * input_samples
-                else:
-                    noise = input_samples
-
                 noise_mask = samples.get("noise_mask", None)
+                noise_mask_contract = None
                 if noise_mask is not None:
                     log.info(f"Latent noise_mask shape: {noise_mask.shape}")
                     original_image = samples.get("original_image", None)
                     if original_image is None:
                         original_image = input_samples
-                    if len(noise_mask.shape) == 4:
-                        noise_mask = noise_mask.squeeze(1)
-                    if noise_mask.shape[0] < noise.shape[1]:
-                        noise_mask = noise_mask.repeat(noise.shape[1] // noise_mask.shape[0], 1, 1)
+                    noise_mask, noise_mask_contract = resize_noise_mask_for_latents(
+                        noise_mask,
+                        latent_shape=(noise.shape[1], noise.shape[2], noise.shape[3]),
+                        channel_count=noise.shape[0],
+                        latent_grow_pixels=1,
+                        latent_temporal_grow_frames=1,
+                    )
+                    log.info(f"WanVideoSampler: {noise_mask_contract.to_log_string()}")
 
-                    noise_mask = torch.nn.functional.interpolate(
-                        noise_mask.unsqueeze(0).unsqueeze(0),  # Add batch and channel dims [1,1,T,H,W]
-                        size=(noise.shape[1], noise.shape[2], noise.shape[3]),
-                        mode='trilinear',
-                        align_corners=False
-                    ).repeat(1, noise.shape[0], 1, 1, 1)
+                noise, samples_init_contract = apply_samples_to_noise(
+                    noise,
+                    input_samples,
+                    noise_mask=noise_mask,
+                    timestep=timesteps[:1].to(noise),
+                    add_noise_to_samples=add_noise_to_samples,
+                    scail_pose2_replacement=(
+                        noise_mask_contract.scail_pose2_replacement
+                        if noise_mask_contract is not None
+                        else False
+                    ),
+                )
+                log.info(f"WanVideoSampler: {samples_init_contract.to_log_string()}")
 
         # extra latents (Pusa) and 5b
         latents_to_insert = add_index = noise_multipliers = None
@@ -1144,6 +1167,14 @@ class WanVideoSampler:
             scail_data = scail_embeds.copy()
             scail_data = dict_to_device(scail_data, device, dtype)
 
+        scail2_data = prepare_scail2_data(
+            image_embeds,
+            dict_to_device=dict_to_device,
+            device=device,
+            dtype=dtype,
+        )
+        if scail2_data is not None:
+            log.info("Using SCAIL-2 native embeddings")
 
         # WanMove
         wanmove_embeds = None
@@ -1417,6 +1448,8 @@ class WanVideoSampler:
                     else:
                         scail_data_in = scail_data
 
+                scail2_data_in = scail2_context_window_input(scail2_data, context_window)
+
                 if wanmove_embeds is not None and context_window is not None:
                     image_cond_input = replace_feature(image_cond_input.unsqueeze(0), track_pos[:, context_window].unsqueeze(0), wanmove_embeds.get("strength", 1.0))[0]
 
@@ -1500,6 +1533,7 @@ class WanVideoSampler:
                     "rope_negative_offset": image_embeds.get("rope_negative_offset_frames", 0), # StoryMem rope negative offset
                     "num_memory_frames": story_mem_latents.shape[1] if story_mem_latents is not None else 0, # StoryMem memory frames
                 }
+                base_params = add_scail2_model_param(base_params, scail2_data_in)
 
                 batch_size = 1
 
@@ -2317,45 +2351,58 @@ class WanVideoSampler:
 
                             if samples is not None:
                                 input_samples = samples["samples"]
+                                source_latent_frame_count = None
+                                mask_start_latent = None
+                                mask_end_latent = None
                                 if input_samples is not None:
                                     input_samples = input_samples.squeeze(0).to(noise)
-                                    # Check if we have enough frames in input_samples
-                                    # if latent_end_idx > input_samples.shape[1]:
-                                    #     # We need more frames than available - pad the input_samples at the end
-                                    #     pad_length = latent_end_idx - input_samples.shape[1]
-                                    #     last_frame = input_samples[:, -1:].repeat(1, pad_length, 1, 1)
-                                    #     input_samples = torch.cat([input_samples, last_frame], dim=1)
-                                    # input_samples = input_samples[:, latent_start_idx:latent_end_idx]
-                                    if noise_mask is not None:
-                                        original_image = input_samples.to(device)
-
-                                    assert input_samples.shape[1] == noise.shape[1], f"Slice mismatch: {input_samples.shape[1]} vs {noise.shape[1]}"
-
-                                    if add_noise_to_samples:
-                                        latent_timestep = timesteps[0]
-                                        noise = noise * latent_timestep / 1000 + (1 - latent_timestep / 1000) * input_samples
-                                    else:
-                                        noise = input_samples
+                                    input_samples, samples_window_contract = align_samples_to_latent_window(
+                                        input_samples,
+                                        target_frame_count=noise.shape[1],
+                                        start_latent=start_latent,
+                                        end_latent=end_latent,
+                                    )
+                                    log.info(f"WanVideoSampler: {samples_window_contract.to_log_string()}")
+                                    if samples_window_contract.frame_policy.startswith("slice_"):
+                                        source_latent_frame_count = samples_window_contract.source_latent_frame_count
+                                        mask_start_latent = start_latent
+                                        mask_end_latent = end_latent
 
                                 # diff diff prep
                                 noise_mask = samples.get("noise_mask", None)
+                                noise_mask_contract = None
                                 if noise_mask is not None:
-                                    if len(noise_mask.shape) == 4:
-                                        noise_mask = noise_mask.squeeze(1)
-                                    if noise_mask.shape[0] < noise.shape[1]:
-                                        noise_mask = noise_mask.repeat(noise.shape[1] // noise_mask.shape[0], 1, 1)
-                                    else:
-                                        noise_mask = noise_mask[start_latent:end_latent]
-                                    noise_mask = torch.nn.functional.interpolate(
-                                        noise_mask.unsqueeze(0).unsqueeze(0),  # Add batch and channel dims [1,1,T,H,W]
-                                        size=(noise.shape[1], noise.shape[2], noise.shape[3]),
-                                        mode='trilinear',
-                                        align_corners=False
-                                    ).repeat(1, noise.shape[0], 1, 1, 1)
+                                    if input_samples is not None:
+                                        original_image = input_samples.to(device)
+                                    noise_mask, noise_mask_contract = resize_noise_mask_for_latents(
+                                        noise_mask,
+                                        latent_shape=(noise.shape[1], noise.shape[2], noise.shape[3]),
+                                        channel_count=noise.shape[0],
+                                        start_latent=mask_start_latent,
+                                        end_latent=mask_end_latent,
+                                        source_latent_frame_count=source_latent_frame_count,
+                                        latent_grow_pixels=1,
+                                        latent_temporal_grow_frames=1,
+                                    )
+                                    log.info(f"WanVideoSampler: {noise_mask_contract.to_log_string()}")
 
                                     thresholds = torch.arange(len(timesteps), dtype=original_image.dtype) / len(timesteps)
                                     thresholds = thresholds.reshape(-1, 1, 1, 1, 1).to(device)
                                     masks = (1-noise_mask.repeat(len(timesteps), 1, 1, 1, 1).to(device)) > thresholds
+                                if input_samples is not None:
+                                    noise, samples_init_contract = apply_samples_to_noise(
+                                        noise,
+                                        input_samples,
+                                        noise_mask=noise_mask,
+                                        timestep=timesteps[0],
+                                        add_noise_to_samples=add_noise_to_samples,
+                                        scail_pose2_replacement=(
+                                            noise_mask_contract.scail_pose2_replacement
+                                            if noise_mask_contract is not None
+                                            else False
+                                        ),
+                                    )
+                                    log.info(f"WanVideoSampler: {samples_init_contract.to_log_string()}")
 
                             if isinstance(scheduler, dict):
                                 sample_scheduler = copy.deepcopy(scheduler["sample_scheduler"])
