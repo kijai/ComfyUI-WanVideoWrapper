@@ -1128,7 +1128,7 @@ class VideoVAE_(nn.Module):
 
 
 
-    def decode(self, z, pbar=True):
+    def decode(self, z, pbar=True, output_device=None, output_dtype=None):
         # z: [b,c,t,h,w]
         z = z / self.inv_std.to(z) + self.mean.to(z)
         input_shape = z.shape
@@ -1140,22 +1140,50 @@ class VideoVAE_(nn.Module):
         except Exception:
             pass
         x = self.conv2(z)
+        out = None
+        out_offset = 0
+        temporal_factor = 2 ** sum(self.temperal_upsample)
         for i in tqdm(range(iter_), desc="WanVAE decoding frames", disable=not pbar):
             self._conv_idx = [0]
-            if i == 0:
-                out = self.decoder(x[:, :, i:i + 1, :, :],
-                                   feat_cache=self._feat_map,
-                                   feat_idx=self._conv_idx)
+            out_chunk = self.decoder(x[:, :, i:i + 1, :, :],
+                                     feat_cache=self._feat_map,
+                                     feat_idx=self._conv_idx)
+            if output_device is None:
+                if out is None:
+                    out = out_chunk
+                else:
+                    out = torch.cat([out, out_chunk], 2)
             else:
-                out_ = self.decoder(x[:, :, i:i + 1, :, :],
-                                    feat_cache=self._feat_map,
-                                    feat_idx=self._conv_idx)
-                out = torch.cat([out, out_], 2)
+                if out is None:
+                    output_frames = (
+                        out_chunk.shape[2] + (iter_ - 1) * temporal_factor
+                    )
+                    out = torch.empty(
+                        (
+                            out_chunk.shape[0],
+                            out_chunk.shape[1],
+                            output_frames,
+                            out_chunk.shape[3],
+                            out_chunk.shape[4],
+                        ),
+                        device=output_device,
+                        dtype=(
+                            output_dtype
+                            if output_dtype is not None
+                            else out_chunk.dtype
+                        ),
+                    )
+                next_offset = out_offset + out_chunk.shape[2]
+                out[:, :, out_offset:next_offset].copy_(out_chunk)
+                out_offset = next_offset
+                del out_chunk
 
             if pbar:
                 pbar.update(1)
         if pbar:
             pbar.update_absolute(0)
+        if output_device is not None and out_offset != out.shape[2]:
+            raise RuntimeError("WanVAE decoder produced an incomplete output")
         self.clear_cache()
         if self.verbose:
             try:
@@ -1366,9 +1394,24 @@ class WanVideoVAE(nn.Module):
         x = self.model.encode(video, pbar=pbar, sample=sample)
         return x.float()
 
-    def single_decode(self, hidden_state, device, pbar=True):
+    def single_decode(
+        self,
+        hidden_state,
+        device,
+        pbar=True,
+        output_device=None,
+        output_dtype=None,
+    ):
         hidden_state = hidden_state.to(device)
-        video = self.model.decode(hidden_state, pbar=pbar)
+        if output_device is None or type(self.model) is not VideoVAE_:
+            video = self.model.decode(hidden_state, pbar=pbar)
+        else:
+            video = self.model.decode(
+                hidden_state,
+                pbar=pbar,
+                output_device=output_device,
+                output_dtype=output_dtype,
+            )
         return video
 
     def double_encode(self, video, device, pbar=True, sample=False):
@@ -1402,7 +1445,18 @@ class WanVideoVAE(nn.Module):
         return hidden_states
 
 
-    def decode(self, hidden_states, device, tiled=False, end_=False, tile_size=(34, 34), tile_stride=(18, 16), pbar=True):
+    def decode(
+        self,
+        hidden_states,
+        device,
+        tiled=False,
+        end_=False,
+        tile_size=(34, 34),
+        tile_stride=(18, 16),
+        pbar=True,
+        output_device=None,
+        output_dtype=None,
+    ):
         self.model.clear_cache()
         hidden_states = [hidden_state.to("cpu") for hidden_state in hidden_states]
         videos = []
@@ -1414,7 +1468,13 @@ class WanVideoVAE(nn.Module):
                 if end_:
                     video = self.double_decode(hidden_state, device)
                 else:
-                    video = self.single_decode(hidden_state, device, pbar=pbar)
+                    video = self.single_decode(
+                        hidden_state,
+                        device,
+                        pbar=pbar,
+                        output_device=output_device,
+                        output_dtype=output_dtype,
+                    )
             video = video.squeeze(0)
             videos.append(video)
         return videos
