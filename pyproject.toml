@@ -1,7 +1,7 @@
 [project]
 name = "ComfyUI-WanVideoWrapper"
 description = "ComfyUI wrapper nodes for WanVideo"
-version = "1.4.7"
+version = "1.4.8"
 license = {file = "LICENSE"}
 dependencies = ["accelerate >= 1.2.1", "diffusers >= 0.33.0", "peft >= 0.17.0", "ftfy", "gguf >= 0.17.1", "pyloudnorm"]
 
