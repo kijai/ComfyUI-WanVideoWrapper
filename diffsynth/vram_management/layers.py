@@ -30,12 +30,30 @@ class AutoWrappedModule(torch.nn.Module):
             self.module.to(dtype=self.onload_dtype, device=self.onload_device)
             self.state = 1
 
+    def __getattr__(self, name: str):
+        # Proxy attribute access to the wrapped module so that model code that
+        # directly accesses e.g. `norm_layer.weight.dtype` on an AutoWrappedModule
+        # (for dtype-cast purposes) still works.
+        # nn.Module.__getattr__ is only called when the standard lookup fails,
+        # so this doesn't interfere with 'module', 'offload_device', etc.
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            if name == 'module':
+                raise  # guard against recursion before self.module is set
+            return getattr(self.module, name)
+
     def forward(self, *args, **kwargs):
-        if self.onload_dtype == self.computation_dtype and self.onload_device == self.computation_device:
-            module = self.module
-        else:
-            module = copy.deepcopy(self.module).to(dtype=self.computation_dtype, device=self.computation_device)
-        return module(*args, **kwargs)
+        # Always ensure the inner module is on the compute device before running.
+        # Original code used 'module = self.module' (no cast) when
+        # onload_device == computation_device, but that assumption breaks when
+        # weights are CPU-resident (loaded via load_weights to offload_device).
+        # Using in-place .to() avoids the expensive deepcopy and is correct
+        # regardless of where self.module was loaded.
+        self.module.to(dtype=self.computation_dtype, device=self.computation_device)
+        output = self.module(*args, **kwargs)
+        self.module.to(dtype=self.offload_dtype, device=self.offload_device)
+        return output
     
 
 class AutoWrappedLinear(torch.nn.Linear):
