@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import os, gc, uuid
-from .utils import log, apply_lora
+from .utils import log, apply_lora, log_memory_peak, close_gguf_readers, log_ram_usage
 import numpy as np
 from tqdm import tqdm
 import re
@@ -23,7 +23,7 @@ from comfy.sd import load_lora_for_models
 try:
     from .gguf.gguf import _replace_with_gguf_linear, GGUFParameter
     from gguf import GGMLQuantizationType
-except Exception:
+except:
     pass
 
 script_directory = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +33,7 @@ offload_device = mm.unet_offload_device()
 
 try:
     from server import PromptServer
-except Exception:
+except:
     PromptServer = None
 
 attention_modes = ["sdpa", "flash_attn_2", "flash_attn_3", "sageattn", "sageattn_3", "radial_sage_attention", "sageattn_compiled",
@@ -104,9 +104,6 @@ def filter_state_dict_by_blocks(state_dict, blocks_mapping, layer_filter=[]):
                     filtered_dict[key] = state_dict[key]
             else:
                 filtered_dict[key] = state_dict[key]
-
-    for key in filtered_dict:
-        print(key)
 
     #from safetensors.torch import save_file
     #save_file(filtered_dict, "filtered_state_dict_2.safetensors")
@@ -414,7 +411,7 @@ class WanVideoLoraSelect:
 
         try:
             lora_path = folder_paths.get_full_path_or_raise("loras", lora)
-        except Exception:
+        except:
             lora_path = lora
 
         # Load metadata from the safetensors file
@@ -716,13 +713,16 @@ def load_lora_for_models_mod(model, lora, strength_model):
         key_map = model_lora_keys_unet(model.model, key_map)
 
     loaded = comfy.lora.load_lora(lora, key_map)
+    log_ram_usage(f"[RAM] load_lora_for_models_mod: After comfy.load_lora, {len(loaded)} loaded keys")
 
     new_modelpatcher = model.clone()
+    log_ram_usage(f"[RAM] load_lora_for_models_mod: After model.clone(), old patches={len(model.patches)}, new patches={len(new_modelpatcher.patches)}")
     k = add_patches(new_modelpatcher, loaded, strength_model)
     k = set(k)
     for x in loaded:
         if (x not in k):
             log.warning("NOT LOADED {}".format(x))
+    log_ram_usage(f"[RAM] load_lora_for_models_mod: After add_patches, patches={len(new_modelpatcher.patches)}")
 
     return (new_modelpatcher)
 
@@ -750,7 +750,9 @@ class WanVideoSetLoRAs:
         if lora is None:
             return (model,)
 
+        log_ram_usage("[RAM] WanVideoSetLoRAs.setlora START")
         patcher = model.clone()
+        log_ram_usage("[RAM] After model.clone()")
 
         merge_loras = False
         for l in lora:
@@ -770,7 +772,11 @@ class WanVideoSetLoRAs:
             if lora_strength == 0:
                 log.warning(f"LoRA {lora_path} has strength 0, skipping...")
                 continue
+            log_ram_usage(f"[RAM] setlora: Before load_torch_file ({l['name']})")
             lora_sd = load_torch_file(lora_path, safe_load=True)
+            lora_bytes = sum(v.numel() * v.element_size() for v in lora_sd.values() if torch.is_tensor(v))
+            log.info(f"[RAM] setlora: lora_sd size: {lora_bytes / (1024*1024):.1f} MB ({len(lora_sd)} tensors)")
+            log_ram_usage(f"[RAM] setlora: After load_torch_file ({l['name']})")
             if "dwpose_embedding.0.weight" in lora_sd: #unianimate
                 raise NotImplementedError("Unianimate LoRA patching is not implemented in this node.")
             if "base_model.model.blocks.0.cross_attn.k.lora_A.weight" in lora_sd: # assume rs_lora
@@ -787,10 +793,16 @@ class WanVideoSetLoRAs:
             if "diffusion_model.patch_embedding.lora_A.weight" in lora_sd:
                 raise NotImplementedError("Control LoRA patching is not implemented in this node.")
 
+            log_ram_usage(f"[RAM] setlora: Before load_lora_for_models_mod ({l['name']})")
             patcher = load_lora_for_models_mod(patcher, lora_sd, lora_strength)
+            log_ram_usage(f"[RAM] setlora: After load_lora_for_models_mod ({l['name']}), patcher.patches={len(patcher.patches)}")
 
+            log_ram_usage(f"[RAM] setlora: Before del lora_sd ({l['name']})")
             del lora_sd
+            gc.collect()
+            log_ram_usage(f"[RAM] setlora: After del lora_sd + gc ({l['name']})")
 
+        log_ram_usage("[RAM] WanVideoSetLoRAs.setlora END")
         return (patcher,)
 
 def rename_fuser_block(name):
@@ -812,56 +824,50 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
     pbar = ProgressBar(param_count)
     block_idx = vace_block_idx = None
 
+    # Initialize GGUF on-demand loading structures (used only when gguf=True,
+    # but defined here so the named_parameters loop can safely reference them).
+    extra_sd = {}
+    tensor_map = {}
+
     if gguf:
         log.info("Using GGUF to load and assign model weights to device...")
 
-        # Prepare sd from GGUF readers
+        # Collect non-meta weights from the passed-in sd (if any).
+        # These are weights that were already loaded (not from GGUF reader).
+        if sd is not None:
+            for key, value in sd.items():
+                if value.device != torch.device("meta"):
+                    extra_sd[key] = value
 
-        # handle possible non-GGUF weights
-        extra_sd = {}
-        for key, value in sd.items():
-            if value.device != torch.device("meta"):
-                extra_sd[key] = value
-
-        sd = {}
-        all_tensors = []
+        # Build name -> reader tensor mapping (NO data copies, just references).
+        # This avoids building a full sd dict with ALL tensor data copies in RAM
+        # simultaneously, which was the main cause of RAM exhaustion for large
+        # GGUF models (e.g. ~14GB for a 14B Q8_0 model).
         for r in reader:
-            all_tensors.extend(r.tensors)
-        for tensor in all_tensors:
-            name = rename_fuser_block(tensor.name)
-            if "glob" not in name and "multitalk_audio_proj" not in name and "audio_proj" in name:
-                name = name.replace("audio_proj", "multitalk_audio_proj")
-            load_device = device
-            if "vace_blocks." in name:
-                try:
-                    vace_block_idx = int(name.split("vace_blocks.")[1].split(".")[0])
-                except Exception:
-                    vace_block_idx = None
-            elif "blocks." in name and "face" not in name:
-                try:
-                    block_idx = int(name.split("blocks.")[1].split(".")[0])
-                except Exception:
-                    block_idx = None
+            for tensor in r.tensors:
+                name = rename_fuser_block(tensor.name)
+                if "glob" not in name and "multitalk_audio_proj" not in name and "audio_proj" in name:
+                    name = name.replace("audio_proj", "multitalk_audio_proj")
+                tensor_map[name] = tensor
 
-            if block_swap_args is not None:
-                if block_idx is not None:
-                    if block_idx >= len(transformer.blocks) - block_swap_args.get("blocks_to_swap", 0):
-                        load_device = offload_device
-                elif vace_block_idx is not None:
-                    if vace_block_idx >= len(transformer.vace_blocks) - block_swap_args.get("vace_blocks_to_swap", 0):
-                        load_device = offload_device
-
-            is_gguf_quant = tensor.tensor_type not in [GGMLQuantizationType.F32, GGMLQuantizationType.F16]
-            weights = torch.from_numpy(tensor.data.copy()).to(load_device)
-            sd[name] = GGUFParameter(weights, quant_type=tensor.tensor_type) if is_gguf_quant else weights
-        sd.update(extra_sd)
-        del all_tensors, extra_sd
+        # Use the original sd (meta tensors from load_gguf) + extra_sd for module
+        # replacement. _replace_linear only needs shapes and is_gguf flag, NOT
+        # actual weight data, so meta tensors are sufficient.
+        replacement_sd = {}
+        if sd is not None:
+            replacement_sd.update(sd)
+        replacement_sd.update(extra_sd)
 
         if not getattr(transformer, "gguf_patched", False):
             transformer = _replace_with_gguf_linear(
-                transformer, base_dtype, sd, patches=patcher.patches, compile_args=compile_args
+                transformer, base_dtype, replacement_sd, patches=patcher.patches, compile_args=compile_args
             )
             transformer.gguf_patched = True
+
+        del replacement_sd
+        # Set sd to None so the named_parameters loop uses on-demand loading
+        # from tensor_map instead of a pre-built sd dict.
+        sd = None
     else:
         log.info("Loading and assigning model weights to device...")
     named_params = transformer.named_parameters()
@@ -890,24 +896,8 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
             continue
 
         key = name.replace("_orig_mod.", "")
-        value=sd[key]
-        keep_fp32 = ["patch_embedding", "motion_encoder", "condition_embedding"]
 
-        if gguf:
-            dtype_to_use = torch.float32 if "patch_embedding" in name or "motion_encoder" in name else base_dtype
-        else:
-            dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
-            dtype_to_use = weight_dtype if value.dtype == weight_dtype else dtype_to_use
-            scale_key = key.replace(".weight", ".scale_weight")
-            if scale_key in sd:
-                dtype_to_use = value.dtype
-            if "bias" in name or "img_emb" in name:
-                dtype_to_use = base_dtype
-            if any(k in name for k in keep_fp32):
-                dtype_to_use = torch.float32
-            if "modulation" in name or "norm" in name:
-                dtype_to_use = value.dtype if value.dtype == torch.float32 else base_dtype
-
+        # Determine load_device early — needed for on-demand GGUF tensor loading
         load_device = transformer_load_device
         if block_swap_args is not None:
             load_device = device
@@ -917,9 +907,79 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
             elif vace_block_idx is not None:
                 if vace_block_idx >= len(transformer.vace_blocks) - block_swap_args.get("vace_blocks_to_swap", 0):
                     load_device = offload_device
+
+        on_demand_value = None
+        if sd is None:
+            if gguf and key in tensor_map:
+                # On-demand load from GGUF reader: copy a single tensor's data
+                # and wrap as GGUFParameter. This avoids holding ALL tensor
+                # copies in RAM simultaneously (the previous approach built a
+                # full sd dict containing every tensor's data at once).
+                _tensor = tensor_map[key]
+                _is_gguf_quant = _tensor.tensor_type not in [GGMLQuantizationType.F32, GGMLQuantizationType.F16]
+                _weights = torch.from_numpy(_tensor.data.copy()).to(load_device)
+                on_demand_value = GGUFParameter(_weights, quant_type=_tensor.tensor_type) if _is_gguf_quant else _weights
+                del _weights
+                value = on_demand_value
+            elif key in extra_sd:
+                value = extra_sd[key]
+            elif param.data.device == torch.device("meta"):
+                log.warning(f"Parameter {name} is on meta device and sd is None; skipping reload")
+                continue
+            else:
+                value = param.data
+        else:
+            if key not in sd:
+                log.warning(f"Key {key} not found in sd; skipping")
+                continue
+            value = sd[key]
+        keep_fp32 = ["patch_embedding", "motion_encoder", "condition_embedding"]
+
+        if gguf:
+            dtype_to_use = torch.float32 if "patch_embedding" in name or "motion_encoder" in name else base_dtype
+        else:
+            dtype_to_use = base_dtype if any(keyword in name for keyword in params_to_keep) else weight_dtype
+            dtype_to_use = weight_dtype if value.dtype == weight_dtype else dtype_to_use
+
+            # Check scale_weight on the module itself so sd can be released after first load.
+            # CustomLinear (from _replace_linear) and fp8_optimization both store scale_weight
+            # as a module attribute, so we no longer need the original state dict.
+            if "." in name:
+                module = transformer.get_submodule(name.rsplit(".", 1)[0])
+            else:
+                module = transformer
+            if getattr(module, "scale_weight", None) is not None:
+                dtype_to_use = value.dtype
+
+            if "bias" in name or "img_emb" in name:
+                dtype_to_use = base_dtype
+            if any(k in name for k in keep_fp32):
+                dtype_to_use = torch.float32
+            if "modulation" in name or "norm" in name:
+                dtype_to_use = value.dtype if value.dtype == torch.float32 else base_dtype
+
         # Set tensor to device
         set_module_tensor_to_device(transformer, name, device=load_device, dtype=dtype_to_use, value=value)
         pbar.update(1)
+
+        # Release on-demand loaded value immediately to keep peak RAM low.
+        # Only one tensor's data copy exists in RAM at any given time.
+        if on_demand_value is not None:
+            del on_demand_value
+            del value
+
+        # For non-GGUF: release the source tensor from sd immediately after
+        # assignment. For GPU-bound tensors, the CPU copy in sd is now redundant
+        # (the data lives on GPU). For CPU-offloaded tensors (block swap), the
+        # module now holds the only reference, so no duplication occurs.
+        # This avoids the peak RAM double-copy where the full sd dict (~28GB
+        # for a 14B FP16 model) coexists with the model's parameters.
+        # Safe because: (1) each key is looked up exactly once in this loop,
+        # (2) all callers release sd right after load_weights returns,
+        # (3) apply_lora with low_mem_load=True is only used when load_weights
+        # is NOT called (they are mutually exclusive in the merge_loras path).
+        elif sd is not None and key in sd:
+            del sd[key]
 
     #[print(name, param.device, param.dtype) for name, param in transformer.named_parameters()]
     memory_on_device = get_module_memory_mb_per_device(transformer)
@@ -931,6 +991,30 @@ def load_weights(transformer, sd=None, weight_dtype=None, base_dtype=None,
     if hasattr(pbar, "_last_sent_value"):
         pbar._last_sent_value = -1
     pbar.update_absolute(0)
+
+    # Release loading resources so no tensor data copies linger after the
+    # weights have been assigned to the model.
+    if gguf:
+        tensor_map.clear()
+        extra_sd.clear()
+        del tensor_map, extra_sd
+        # Close GGUF reader mmap to release system RAM.
+        # After all tensors are loaded, the entire GGUF file sits in the OS
+        # page cache (~10-15GB for large models). Closing the mmap releases
+        # those pages, reducing system RAM usage to just the actual model
+        # weights on CPU (~2GB for block-swapped layers).
+        # Readers are reopened on demand via reopen_gguf_readers() before
+        # weight reloads (block swap cycles).
+        close_gguf_readers(reader)
+        gc.collect()
+        mm.soft_empty_cache()
+    elif sd is not None:
+        # Non-GGUF: sd should be mostly empty now (entries popped during the
+        # loop), but clear any remaining keys (e.g. keys not matching any
+        # named_parameter) and force garbage collection.
+        sd.clear()
+        gc.collect()
+        mm.soft_empty_cache()
 
 def patch_control_lora(transformer, device):
     log.info("Control-LoRA detected, patching model...")
@@ -971,6 +1055,7 @@ def patch_stand_in_lora(transformer, lora_sd, transformer_load_device, base_dtyp
                 param.data.copy_(lora_sd["diffusion_model." + name].to(param.device, dtype=param.dtype))
 
 def add_lora_weights(patcher, lora, base_dtype, merge_loras=False):
+    log_ram_usage("[RAM] add_lora_weights START")
     unianimate_sd = None
     control_lora=False
     #spacepxl's control LoRA patch
@@ -985,7 +1070,12 @@ def add_lora_weights(patcher, lora, base_dtype, merge_loras=False):
         if lora_strength == 0:
             log.warning(f"LoRA {lora_path} has strength 0, skipping...")
             continue
+        log_ram_usage(f"[RAM] Before load_torch_file: {l['name']}")
         lora_sd = load_torch_file(lora_path, safe_load=True)
+        log_ram_usage(f"[RAM] After load_torch_file ({l['name']}, {len(lora_sd)} keys)")
+        # Estimate lora_sd size
+        lora_bytes = sum(v.numel() * v.element_size() for v in lora_sd.values() if torch.is_tensor(v))
+        log.info(f"[RAM] lora_sd estimated size: {lora_bytes / (1024*1024):.1f} MB ({len(lora_sd)} tensors)")
         if "dwpose_embedding.0.weight" in lora_sd: #unianimate
             from .unianimate.nodes import update_transformer
             log.info("Unianimate LoRA detected, patching model...")
@@ -1008,9 +1098,16 @@ def add_lora_weights(patcher, lora, base_dtype, merge_loras=False):
             patch_stand_in_lora(patcher.model.diffusion_model, lora_sd, device, base_dtype, lora_strength)
         # normal LoRA patch
         else:
+            log_ram_usage(f"[RAM] Before load_lora_for_models ({l['name']})")
             patcher, _ = load_lora_for_models(patcher, None, lora_sd, lora_strength, 0)
+            log_ram_usage(f"[RAM] After load_lora_for_models ({l['name']}), patcher.patches now has {len(patcher.patches)} entries")
 
+        log_ram_usage(f"[RAM] Before del lora_sd ({l['name']})")
         del lora_sd
+        log_ram_usage(f"[RAM] After del lora_sd ({l['name']}) gc")
+        gc.collect()
+        log_ram_usage(f"[RAM] After gc.collect ({l['name']})")
+    log_ram_usage("[RAM] add_lora_weights END")
     return patcher, control_lora, unianimate_sd
 
 class WanVideoSetAttentionModeOverride:
@@ -1151,7 +1248,7 @@ class WanVideoModelLoader:
             try:
                 if hasattr(torch.backends.cuda.matmul, "allow_fp16_accumulation"):
                     torch.backends.cuda.matmul.allow_fp16_accumulation = False
-            except Exception:
+            except:
                 pass
 
 
@@ -1159,7 +1256,10 @@ class WanVideoModelLoader:
 
         gguf_reader = None
         if not gguf:
-            sd = load_torch_file(model_path, device=transformer_load_device, safe_load=True)
+            # Load the raw state dict to CPU first, then let load_weights() move
+            # individual tensors to the target device. This avoids a transient
+            # double-copy on the GPU (sd + transformer parameters) during load.
+            sd = load_torch_file(model_path, device=offload_device, safe_load=True)
         else:
             gguf_reader=[]
             from .gguf.gguf import load_gguf
@@ -1238,7 +1338,7 @@ class WanVideoModelLoader:
                 else:
                     if _model["path"].endswith(".gguf"):
                         raise ValueError("With GGUF extra model the main model must also be GGUF quantized model")
-                    extra_sd = load_torch_file(_model["path"], device=transformer_load_device, safe_load=True)
+                    extra_sd = load_torch_file(_model["path"], device=offload_device, safe_load=True)
                 if "audio_model.patch_embedding.0.weight" in extra_sd:
                     extra_audio_model = True
                 sd.update(extra_sd)
@@ -1512,24 +1612,12 @@ class WanVideoModelLoader:
                     block.cross_attn.ip_adapter_single_stream_v_proj = nn.Linear(context_dim, dim, bias=False)
 
         # LongCat Avatar
-        proj1_key = "multitalk_audio_proj.proj1.weight" if "multitalk_audio_proj.proj1.weight" in sd \
-                    else "multitalk_audio_proj.proj1.weight_int8" if "multitalk_audio_proj.proj1.weight_int8" in sd \
-                    else None
-        if proj1_key is not None and ("blocks.0.audio_cross_attn.q_norm.weight" in sd or "blocks.0.audio_cross_attn.q_norm.weight_int8" in sd):
+        if "multitalk_audio_proj.proj1.weight" in sd and "blocks.0.audio_cross_attn.q_norm.weight" in sd:
             log.info("MultiTalk/InfiniteTalk model detected, patching model...")
             from .multitalk.multitalk import AudioProjModel
             from .wanvideo.modules.model import WanLayerNorm
             from .LongCat.layers import SingleStreamAttention
 
-            # Detect LongCat-Avatar audio encoder variant from proj1 input dim:
-            #   v1.0 (wav2vec2): seq_len * blocks * channels = 5 * 12 * 768 = 46080
-            #   v1.5 (whisper):  seq_len * blocks * channels = 5 *  5 * 1280 = 32000
-            proj1_in = sd[proj1_key].shape[1]
-            if proj1_in == 32000:
-                audio_proj_blocks, audio_proj_channels = 5, 1280
-                log.info("LongCat-Avatar-1.5 (Whisper) audio proj detected")
-            else:
-                audio_proj_blocks, audio_proj_channels = 12, 768
 
             for block in transformer.blocks:
                 with init_empty_weights():
@@ -1546,7 +1634,7 @@ class WanVideoModelLoader:
                         class_interval=4,
                         attention_mode=attention_mode,
                     )
-                    multitalk_proj_model = AudioProjModel(blocks=audio_proj_blocks, channels=audio_proj_channels)
+                    multitalk_proj_model = AudioProjModel()
             transformer.multitalk_audio_proj = multitalk_proj_model
         # SkyreelsV3
         elif "blocks.1.audio_cross_attn.kv_linear.weight" in sd and "audio_proj.proj1.weight" in sd:
@@ -1589,7 +1677,7 @@ class WanVideoModelLoader:
                 gguf_reader.append(extra_reader)
                 del extra_reader
             else:
-                extra_sd_temp = load_torch_file(extra_model_path, device=transformer_load_device, safe_load=True)
+                extra_sd_temp = load_torch_file(extra_model_path, device=offload_device, safe_load=True)
 
             for k, v in extra_sd_temp.items():
                 extra_sd[k.replace("audio_proj.", "multitalk_audio_proj.")] = v
@@ -1707,6 +1795,7 @@ class WanVideoModelLoader:
         comfy_model.load_device = transformer_load_device
         patcher = comfy.model_patcher.ModelPatcher(comfy_model, device, offload_device)
         patcher.model.is_patched = False
+        log_ram_usage("[RAM] After ModelPatcher creation in loadmodel")
 
         scale_weights = {}
         if "fp8" in quantization:
@@ -1729,7 +1818,9 @@ class WanVideoModelLoader:
             log.warning("Control-LoRA patching is only supported with merge_loras=True")
 
         if lora is not None:
+            log_ram_usage("[RAM] loadmodel: Before add_lora_weights")
             patcher, control_lora, unianimate_sd = add_lora_weights(patcher, lora, base_dtype, merge_loras=merge_loras)
+            log_ram_usage(f"[RAM] loadmodel: After add_lora_weights, patcher.patches={len(patcher.patches)}")
             if unianimate_sd is not None:
                 log.info("Merging UniAnimate weights to the model...")
                 sd.update(unianimate_sd)
@@ -1739,6 +1830,7 @@ class WanVideoModelLoader:
             if lora is not None and merge_loras:
                 if not lora_low_mem_load:
                     load_weights(transformer, sd, weight_dtype, base_dtype, transformer_load_device)
+                log_memory_peak("After model load_weights (merge_loras path)", device=transformer_load_device, reset_peak=True)
 
                 if control_lora:
                     patch_control_lora(patcher.model.diffusion_model, device)
@@ -1762,6 +1854,7 @@ class WanVideoModelLoader:
                 raise NotImplementedError("fp8_fast is not supported with unmerged LoRAs")
             from .fp8_optimization import convert_fp8_linear
             convert_fp8_linear(transformer, base_dtype, params_to_keep, scale_weight_keys=scale_weights)
+        log_memory_peak("After FP8 conversion", device=device, reset_peak=True)
 
         if vram_management_args is not None:
             if gguf:
@@ -1805,16 +1898,13 @@ class WanVideoModelLoader:
                 ),
                 compile_args = compile_args,
             )
+            log_memory_peak("After vram_management", device=device, reset_peak=True)
 
         if merge_loras and lora is not None:
-            # Skip offloading if load_device is main_device (for unified memory systems like AMD Strix Halo)
-            if load_device != "main_device":
-                log.info(f"Moving diffusion model from {patcher.model.diffusion_model.device} to {offload_device}")
-                patcher.model.diffusion_model.to(offload_device)
-                gc.collect()
-                mm.soft_empty_cache()
-            else:
-                log.info(f"Skipping offload (load_device=main_device, keeping model on {patcher.model.diffusion_model.device})")
+            log.info(f"Moving diffusion model from {patcher.model.diffusion_model.device} to {offload_device}")
+            patcher.model.diffusion_model.to(offload_device)
+            gc.collect()
+            mm.soft_empty_cache()
 
         patcher.model["base_dtype"] = base_dtype
         patcher.model["weight_dtype"] = weight_dtype
@@ -1835,9 +1925,7 @@ class WanVideoModelLoader:
         patcher.model_options["transformer_options"]["block_swap_args"] = block_swap_args
         patcher.model_options["transformer_options"]["merge_loras"] = merge_loras
 
-        for model in mm.current_loaded_models:
-            if model._model() == patcher:
-                mm.current_loaded_models.remove(model)
+        log_memory_peak("Model loader return", device=device, reset_peak=True)
         return (patcher,)
 
 # class WanVideoSaveModel:

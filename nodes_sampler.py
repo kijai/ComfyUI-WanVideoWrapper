@@ -9,7 +9,7 @@ from .wanvideo.schedulers import get_scheduler, scheduler_list
 from .gguf.gguf import set_lora_params_gguf
 from .multitalk.multitalk import add_noise
 from .utils import(log, print_memory, apply_lora, fourier_filter, optimized_scale, setup_radial_attention,
-                   compile_model, dict_to_device, tangential_projection, get_raag_guidance, temporal_score_rescaling, offload_transformer, init_blockswap)
+                   compile_model, dict_to_device, tangential_projection, get_raag_guidance, temporal_score_rescaling, offload_transformer, init_blockswap, log_memory_peak, reopen_gguf_readers, log_ram_usage)
 from .multitalk.multitalk_loop import multitalk_loop
 from .cache_methods.cache_methods import cache_report
 from .nodes_model_loading import load_weights
@@ -30,6 +30,28 @@ rope_functions = ["default", "comfy", "comfy_chunked"]
 
 VAE_STRIDE = (4, 8, 8)
 PATCH_SIZE = (1, 2, 2)
+
+
+def _weights_load_signature(model, patcher, transformer, block_swap_args, device, weight_dtype, base_dtype, gguf_reader):
+    """Return a hashable signature describing the current weight-load configuration.
+
+    Used to skip redundant full-model load_weights() calls when the model has
+    already been loaded with identical settings in a previous execution.
+    """
+    try:
+        compile_args = model["compile_args"]
+    except KeyError:
+        compile_args = None
+    return (
+        str(device),
+        str(weight_dtype),
+        str(base_dtype),
+        str(block_swap_args) if block_swap_args is not None else None,
+        str(compile_args) if compile_args is not None else None,
+        gguf_reader is not None,
+        getattr(transformer, "patched_linear", False),
+        len(patcher.patches),
+    )
 
 
 class WanVideoSampler:
@@ -83,6 +105,7 @@ class WanVideoSampler:
         experimental_args=None, sigmas=None, unianimate_poses=None, fantasytalking_embeds=None, uni3c_embeds=None, multitalk_embeds=None, freeinit_args=None, start_step=0, end_step=-1, add_noise_to_samples=False):
         if flowedit_args is not None:
             raise Exception("FlowEdit support has been deprecated and removed due to lack of use and code maintainability")
+        log_ram_usage("[RAM] Sampler process START")
         patcher = model
         model = model.model
         transformer = model.diffusion_model
@@ -118,25 +141,84 @@ class WanVideoSampler:
                 if hasattr(block, 'audio_block'):
                     block.audio_block = None
 
-        if not transformer.patched_linear and patcher.model["sd"] is not None and len(patcher.patches) != 0 and gguf_reader is None:
-            transformer = _replace_linear(transformer, dtype, patcher.model["sd"], compile_args=model["compile_args"])
+        if not transformer.patched_linear and len(patcher.patches) != 0 and gguf_reader is None:
+            transformer = _replace_linear(transformer, dtype, patcher.model["sd"], patches=patcher.patches, scale_weights=patcher.model.get("scale_weights", None), compile_args=model["compile_args"])
             transformer.patched_linear = True
-        if patcher.model["sd"] is not None and gguf_reader is None:
-            load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device,
-                         block_swap_args=block_swap_args, compile_args=model["compile_args"])
+
+        load_sig = _weights_load_signature(model, patcher, transformer, block_swap_args, device, weight_dtype, dtype, gguf_reader)
+        weights_offloaded = getattr(transformer, "_wan_weights_offloaded", False)
+        weights_already_loaded = (getattr(transformer, "_wan_weights_load_signature", None) == load_sig) and not weights_offloaded
+        if not weights_already_loaded:
+            if gguf_reader is not None: #handle GGUF
+                log_ram_usage("[RAM] Before reopen + load_weights (GGUF)")
+                reopen_gguf_readers(gguf_reader)  # Reopen mmap if closed from prior load
+                load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True,
+                             reader=gguf_reader, block_swap_args=block_swap_args, compile_args=model["compile_args"])
+            else:
+                load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device,
+                             block_swap_args=block_swap_args, compile_args=model["compile_args"])
+            transformer._wan_weights_load_signature = load_sig
+            transformer._wan_weights_offloaded = False
+            log_memory_peak("After load_weights", device=device, reset_peak=True)
+        else:
+            log.info("WanVideoSampler: transformer weights already loaded with matching configuration, skipping load_weights")
+
+        # Release the original state dict to free memory now that weights are loaded
+        # into the transformer. Subsequent reloads can fall back to param.data.
+        if patcher.model["sd"] is not None:
+            log_ram_usage("[RAM] Before sd release")
+            log.info("WanVideoSampler: releasing patcher.model['sd'] to free memory")
+            patcher.model["sd"] = None
+            gc.collect()
+            mm.soft_empty_cache()
+        log_memory_peak("After sd release", device=device, reset_peak=True)
+        log_ram_usage("[RAM] After sd release, before LoRA setup")
 
         if gguf_reader is not None: #handle GGUF
-            load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True,
-                         reader=gguf_reader, block_swap_args=block_swap_args, compile_args=model["compile_args"])
-            set_lora_params_gguf(transformer, patcher.patches)
+            log.info(f"[RAM] patcher.patches has {len(patcher.patches)} entries before set_lora_params_gguf")
+            # Show first 5 patcher.patches keys for diagnostic comparison
+            _sample_keys = list(patcher.patches.keys())[:5]
+            log.info(f"[RAM-diag] patcher.patches sample keys: {_sample_keys}")
+            log_ram_usage("[RAM] Before set_lora_params_gguf")
+            _diag = {}
+            lora_count, lora_bytes, lora_modules = set_lora_params_gguf(
+                transformer, patcher.patches, force_cpu=True, _diag=_diag
+            )
+            _mismatches = _diag.get('_key_mismatches', [])
+            log.info(
+                f"[RAM] set_lora_params_gguf: {lora_count} params, "
+                f"{lora_bytes / (1024*1024):.1f} MB, "
+                f"{lora_modules} CustomLinear matched "
+                f"(total CL: {_diag.get('customlinear_total', '?')}, "
+                f"matched: {_diag.get('customlinear_matched', '?')}, "
+                f"bytes: {_diag.get('customlinear_bytes', 0) / (1024*1024):.1f} MB)"
+            )
+            if _mismatches:
+                log.info(f"[RAM-diag] First unmatched CL keys (up to 5): {_mismatches}")
+            log_ram_usage("[RAM] After set_lora_params_gguf")
             transformer.patched_linear = True
         elif len(patcher.patches) != 0: #handle patched linear layers (unmerged loras, fp8 scaled)
             log.info(f"Using {len(patcher.patches)} LoRA weight patches for WanVideo model")
             if not merge_loras and fp8_matmul:
                 raise NotImplementedError("FP8 matmul with unmerged LoRAs is not supported")
-            set_lora_params(transformer, patcher.patches)
+            log_ram_usage("[RAM] Before set_lora_params (non-GGUF)")
+            set_lora_params(transformer, patcher.patches, force_cpu=True)
+            log_ram_usage("[RAM] After set_lora_params (non-GGUF)")
         else:
             remove_lora_from_module(transformer) #clear possible unmerged lora weights
+
+        # Free the original LoRA tensors in patcher.patches now that
+        # set_lora_params has copied all diffs into CustomLinear module
+        # attributes. Without this, patcher.patches holds ~1-2GB of LoRA
+        # tensor data in CPU RAM that is duplicated by the module copies.
+        if len(patcher.patches) > 0:
+            log_ram_usage("[RAM] Before patcher.patches.clear()")
+            patcher.patches.clear()
+            gc.collect()
+            mm.soft_empty_cache()
+            log_ram_usage("[RAM] After patcher.patches.clear() + gc")
+
+        log_memory_peak("After LoRA setup", device=device, reset_peak=True)
 
         transformer.lora_scheduling_enabled = transformer_options.get("lora_scheduling_enabled", False)
 
@@ -564,7 +646,6 @@ class WanVideoSampler:
 
         # MultiTalk
         multitalk_audio_embeds = audio_emb_slice = audio_features_in = None
-        multitalk_audio_stride = None
         multitalk_embeds = image_embeds.get("multitalk_embeds", multitalk_embeds)
 
         if multitalk_embeds is not None:
@@ -585,7 +666,6 @@ class WanVideoSampler:
             audio_scale = multitalk_embeds.get("audio_scale", 1.0)
             audio_cfg_scale = multitalk_embeds.get("audio_cfg_scale", 1.0)
             ref_target_masks = multitalk_embeds.get("ref_target_masks", None)
-            multitalk_audio_stride = multitalk_embeds.get("audio_stride", None)
             if not isinstance(audio_cfg_scale, list):
                 audio_cfg_scale = [audio_cfg_scale] * (steps + 1)
 
@@ -819,11 +899,7 @@ class WanVideoSampler:
                 latent_video_length += insert_len
             longcat_num_cond_latents = len(clean_latent_indices)
             log.info(f"LongCat num_cond_latents: {longcat_num_cond_latents} num_ref_latents: {longcat_num_ref_latents}")
-        # v1.5 (Whisper) embeds set audio_stride=1; v1.0 (wav2vec2) uses 2 for LongCat
-        if multitalk_audio_stride is not None:
-            audio_stride = multitalk_audio_stride
-        else:
-            audio_stride = 2 if transformer.is_longcat else 1
+        audio_stride = 2 if transformer.is_longcat else 1
 
         #controlnet
         controlnet_latents = controlnet = None
@@ -877,9 +953,11 @@ class WanVideoSampler:
         mm.unload_all_models()
         mm.soft_empty_cache()
         gc.collect()
+        log_memory_peak("Before init_blockswap", device=device, reset_peak=True)
 
         #blockswap init
         init_blockswap(transformer, block_swap_args, model)
+        log_memory_peak("After init_blockswap", device=device, reset_peak=True)
 
         # Initialize Cache if enabled
         previous_cache_states = None
@@ -1185,6 +1263,7 @@ class WanVideoSampler:
                     return z*0, None
 
                 nonlocal patcher
+                log_memory_peak(f"predict_with_cfg step {idx} start", device=device, reset_peak=True)
                 current_step_percentage = idx / len(timesteps)
                 control_lora_enabled = False
                 image_cond_input = None
@@ -1736,7 +1815,7 @@ class WanVideoSampler:
         gc.collect()
         try:
             torch.cuda.reset_peak_memory_stats(device)
-        except Exception:
+        except:
             pass
 
         # Main sampling loop with FreeInit iterations
@@ -1799,6 +1878,7 @@ class WanVideoSampler:
                 pbar = ProgressBar(len(timesteps) - ttm_start_step)
                 #region main loop start
                 for idx, t in enumerate(tqdm(timesteps[ttm_start_step:], disable=multitalk_sampling or wananimate_loop)):
+                    log_memory_peak(f"Step {idx}/{len(timesteps)} start", device=device, reset_peak=True)
 
                     if bidirectional_sampling:
                         latent_flipped = torch.flip(latent, dims=[1])
@@ -2188,7 +2268,7 @@ class WanVideoSampler:
                         try:
                             print_memory(device)
                             torch.cuda.reset_peak_memory_stats(device)
-                        except Exception:
+                        except:
                             pass
                         return {"video": gen_video_samples},
                     # region wananimate loop
@@ -2212,11 +2292,7 @@ class WanVideoSampler:
                         bg_images = image_embeds.get("bg_images", None)
                         pose_images = image_embeds.get("pose_images", None)
 
-                        current_ref_images = image_embeds.get("start_ref_image", None)
-                        if current_ref_images is not None:
-                            log.info(
-                                "WanAnimate: Detected manual start reference image, enabling continuous generation across windows.")
-                        face_images = face_images_in = None
+                        current_ref_images = face_images = face_images_in = None
 
                         if wananim_face_pixels is not None:
                             face_images = tensor_pingpong_pad(wananim_face_pixels, target_len)
@@ -2255,10 +2331,7 @@ class WanVideoSampler:
 
                             mm.soft_empty_cache()
 
-                            if current_ref_images is not None:
-                                mask_reft_len = refert_num
-                            else:
-                                mask_reft_len = 0 if start == 0 else refert_num
+                            mask_reft_len = 0 if start == 0 else refert_num
 
                             self.cache_state = [None, None]
 
@@ -2367,11 +2440,17 @@ class WanVideoSampler:
                             latent = noise
 
                             if offloaded:
-                                # Load weights
-                                if transformer.patched_linear and gguf_reader is None:
-                                    load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device, block_swap_args=block_swap_args)
-                                elif gguf_reader is not None: #handle GGUF
+                                # Load weights (only if configuration changed or weights were offloaded)
+                                offloaded_sig = _weights_load_signature(model, patcher, transformer, block_swap_args, device, weight_dtype, dtype, gguf_reader)
+                                offloaded_loaded = (getattr(transformer, "_wan_weights_load_signature", None) == offloaded_sig) and not getattr(transformer, "_wan_weights_offloaded", False)
+                            if not offloaded_loaded:
+                                if gguf_reader is not None: #handle GGUF
+                                    reopen_gguf_readers(gguf_reader)
                                     load_weights(transformer, patcher.model["sd"], base_dtype=dtype, transformer_load_device=device, patcher=patcher, gguf=True, reader=gguf_reader, block_swap_args=block_swap_args)
+                                else:
+                                    load_weights(patcher.model.diffusion_model, patcher.model["sd"], weight_dtype, base_dtype=dtype, transformer_load_device=device, block_swap_args=block_swap_args)
+                                transformer._wan_weights_load_signature = offloaded_sig
+                                transformer._wan_weights_offloaded = False
                                 #blockswap init
                                 init_blockswap(transformer, block_swap_args, model)
 
@@ -2437,7 +2516,7 @@ class WanVideoSampler:
                             videos = vae.decode(latent[:, 1:].unsqueeze(0).to(device, vae.dtype), device=device, tiled=tiled_vae, pbar=False)[0].cpu()
                             del latent
 
-                            if start != 0 or current_ref_images is not None:
+                            if start != 0:
                                 videos = videos[:, refert_num:]
 
                             sampling_pbar.close()
@@ -2489,7 +2568,7 @@ class WanVideoSampler:
                         try:
                             print_memory(device)
                             torch.cuda.reset_peak_memory_stats(device)
-                        except Exception:
+                        except:
                             pass
                         return {"video": gen_video_samples.permute(1, 2, 3, 0), "output_path": output_path},
 
@@ -2503,6 +2582,7 @@ class WanVideoSampler:
                             humo_image_cond=humo_image_cond, humo_image_cond_neg=humo_image_cond_neg, humo_audio=humo_audio, humo_audio_neg=humo_audio_neg,
                             wananim_face_pixels=wananim_face_pixels, wananim_pose_latents=wananim_pose_latents, uni3c_data = uni3c_data, latent_model_input_ovi=latent_model_input_ovi, flashvsr_LQ_latent=flashvsr_LQ_latent,
                         )
+                        log_memory_peak(f"predict_with_cfg step {idx} return", device=device, reset_peak=False)
                         if bidirectional_sampling:
                             noise_pred_flipped, _,self.cache_state = predict_with_cfg(
                             latent_model_input_flipped,
@@ -2596,13 +2676,14 @@ class WanVideoSampler:
                         callback(idx, callback_latent.permute(1,0,2,3), None, len(timesteps))
                     else:
                         pbar.update(1)
+                    log_memory_peak(f"Step {idx}/{len(timesteps)} end", device=device, reset_peak=False)
 
             except Exception as e:
                 log.error(f"Error during sampling: {e}")
-                raise
-            finally:
-                if force_offload and not model["auto_cpu_offload"]:
-                    offload_transformer(transformer)
+                if force_offload:
+                    if not model["auto_cpu_offload"]:
+                        offload_transformer(transformer)
+                raise e
 
         if phantom_latents is not None:
             latent = latent[:,:-phantom_latents.shape[1]]
@@ -2626,10 +2707,14 @@ class WanVideoSampler:
                     "magcache_state": transformer.magcache_state,
                 }
 
+        if force_offload:
+            if not model["auto_cpu_offload"]:
+                offload_transformer(transformer)
+
         try:
             print_memory(device)
             torch.cuda.reset_peak_memory_stats(device)
-        except Exception:
+        except:
             pass
         return ({
             "samples": latent.unsqueeze(0).cpu(),
@@ -2773,7 +2858,7 @@ class WanVideoScheduler:
             import io
             import base64
             import matplotlib.pyplot as plt
-        except Exception:
+        except:
             PromptServer = None
         if unique_id and PromptServer is not None:
             try:
