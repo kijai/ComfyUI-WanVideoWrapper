@@ -18,16 +18,16 @@ class WanVideoUni3C_ControlnetLoader:
             "required": {
                 "model": (folder_paths.get_filename_list("controlnet"), {"tooltip": "These models are loaded from the 'ComfyUI/models/controlnet' -folder",}),
 
-            "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16"}),
-            "quantization": (['disabled', 'fp8_e4m3fn', 'fp8_e5m2'], {"default": 'disabled', "tooltip": "optional quantization method"}),
+            "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16", "tooltip": "Compute dtype for non-quantized weights (norms, time/text/image embeddings, head); fp16 is the usual default"}),
+            "quantization": (['disabled', 'fp8_e4m3fn', 'fp8_e5m2'], {"default": 'disabled', "tooltip": "Optional fp8 quantization of the controlnet weights to reduce VRAM; e5m2 has wider range, disabled keeps base_precision"}),
             "load_device": (["main_device", "offload_device"], {"default": "offload_device", "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"}),
             "attention_mode": ([
                     "sdpa",
                     "sageattn",
-                    ], {"default": "sdpa"}),
+                    ], {"default": "sdpa", "tooltip": "Attention backend for the Uni3C controlnet — sdpa is the safe default (PyTorch native), sageattn is faster but requires the sageattention package"}),
             },
             "optional": {
-                "compile_args": ("WANCOMPILEARGS", ),
+                "compile_args": ("WANCOMPILEARGS",  {"tooltip": "Optional torch.compile settings for the controlnet — connect from WanVideoTorchCompileSettings"}),
                 #"block_swap_args": ("BLOCKSWAPARGS", ),
             }
         }
@@ -136,14 +136,14 @@ class WanVideoUni3C_embeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "controlnet": ("WANVIDEOCONTROLNET",),
-            "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001}),
-            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the steps to apply the controlnet"}),
-            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the steps to apply the controlnet"}),
+            "controlnet": ("WANVIDEOCONTROLNET", {"tooltip": "Loaded Uni3C controlnet weights — connect from WanVideoUni3C_ControlnetLoader"}),
+            "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Multiplier on the Uni3C controlnet residual added to the diffusion model; 1.0 is baseline, lower softens 3D-aware guidance, higher overdrives it"}),
+            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Fraction of total sampling steps at which Uni3C controlnet guidance starts applying (0.0 = from step 0)"}),
+            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Fraction of total sampling steps at which Uni3C controlnet guidance stops applying (1.0 = through the final step)"}),
             },
             "optional": {
-                "render_latent": ("LATENT",),
-                "render_mask": ("MASK", {"tooltip": "NOT IMPLEMENTED!"}),
+                "render_latent": ("LATENT", {"tooltip": "Encoded 3D-aware render latent (e.g. from a depth/geometry pipeline) supplying the spatial reference for Uni3C guidance"}),
+                "render_mask": ("MASK", {"tooltip": "NOT IMPLEMENTED — placeholder input; currently raises NotImplementedError if connected"}),
                 "offload": ("BOOLEAN", {"default": True, "tooltip": "If enabled, the controlnet model will be offloaded before main model block processing to save VRAM."}),
             },
         }

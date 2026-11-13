@@ -56,7 +56,7 @@ class WhisperModelLoader:
         return {
             "required": {
                 "model": (folder_paths.get_filename_list("audio_encoders"), {"tooltip": "These models are loaded from the 'ComfyUI/models/audio_encoders' folder",}),
-                "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16"}),
+                "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16", "tooltip": "Computation/storage dtype for the Whisper encoder weights; fp16 is the safe default, fp32 is most accurate but uses more VRAM"}),
                 "load_device": (["main_device", "offload_device"], {"default": "main_device", "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"}),
             },
         }
@@ -120,19 +120,19 @@ class HuMoEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "num_frames": ("INT", {"default": 81, "min": -1, "max": 10000, "step": 1, "tooltip": "The total frame count to generate."}),
-            "width": ("INT", {"default": 832, "min": 64, "max": 4096, "step": 16}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 4096, "step": 16}),
-            "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the audio conditioning"}),
+            "num_frames": ("INT", {"default": 81, "min": -1, "max": 10000, "step": 1, "tooltip": "Total frame count to generate; -1 derives the length from the audio duration"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 4096, "step": 16, "tooltip": "Output width in pixels; should be a multiple of 16 and match a resolution the base model was trained on"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 4096, "step": 16, "tooltip": "Output height in pixels; should be a multiple of 16 and match a resolution the base model was trained on"}),
+            "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the audio conditioning applied to the cross-attention; higher = more pronounced lip motion, 1.0 is the trained default"}),
             "audio_cfg_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "When not 1.0, an extra model pass without audio conditioning is done: slower inference but more motion is allowed"}),
             "audio_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "The percent of the video to start applying audio conditioning"}),
             "audio_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "The percent of the video to stop applying audio conditioning"})
         },
             "optional" : {
-                "whisper_model": ("WHISPERMODEL",),
-                "vae": ("WANVAE", ),
-                "reference_images": ("IMAGE", {"tooltip": "reference images for the humo model"}),
-                "audio": ("AUDIO",),
+                "whisper_model": ("WHISPERMODEL", {"tooltip": "Loaded Whisper encoder used to extract audio features for HuMo — connect from Whisper Model Loader. Required if audio is wired."}),
+                "vae": ("WANVAE",  {"tooltip": "Loaded Wan VAE used to encode reference_images into latent space — connect from WanVideoVAELoader. Required if reference_images is wired."}),
+                "reference_images": ("IMAGE", {"tooltip": "Optional reference images for the HuMo model; resized to width × height and VAE-encoded into the latent stream as identity anchors"}),
+                "audio": ("AUDIO", {"tooltip": "Optional speaker audio waveform; resampled to 16 kHz and run through the Whisper encoder to extract per-frame audio features. If omitted, audio conditioning is zeroed."}),
                 "tiled_vae": ("BOOLEAN", {"default": False, "tooltip": "Use tiled VAE encoding for reduced memory use"}),
             }
         }
@@ -257,8 +257,8 @@ class WanVideoCombineEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds_1": ("WANVIDIMAGE_EMBEDS",),
-                    "embeds_2": ("WANVIDIMAGE_EMBEDS",),
+                    "embeds_1": ("WANVIDIMAGE_EMBEDS", {"tooltip": "First Wan image-embeds bundle; merged key-by-key with embeds_2 (embeds_2 keys win on conflict). Experimental — connect from any WANVIDIMAGE_EMBEDS producer."}),
+                    "embeds_2": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Second Wan image-embeds bundle; merged on top of embeds_1 so its keys override. Use to combine e.g. HuMo audio embeds with a separate Wan I2V image_embeds."}),
                 }
         }
 

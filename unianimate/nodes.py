@@ -693,20 +693,20 @@ class WanVideoUniAnimateDWPoseDetector:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                "pose_images": ("IMAGE", {"tooltip": "Pose images"}),
-                "score_threshold": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Score threshold for pose detection"}),
-                "stick_width": ("INT", {"default": 4, "min": 1, "max": 100, "step": 1, "tooltip": "Stick width for drawing keypoints"}),
-                "draw_body": ("BOOLEAN", {"default": True, "tooltip": "Draw body keypoints"}),
-                "body_keypoint_size": ("INT", {"default": 4, "min": 0, "max": 100, "step": 1, "tooltip": "Body keypoint size"}),
-                "draw_feet": ("BOOLEAN", {"default": True, "tooltip": "Draw feet keypoints"}),
-                "draw_hands": ("BOOLEAN", {"default": True, "tooltip": "Draw hand keypoints"}),
-                "hand_keypoint_size": ("INT", {"default": 4, "min": 0, "max": 100, "step": 1, "tooltip": "Hand keypoint size"}),
-                "colorspace": (["RGB", "BGR"], {"tooltip": "Color space for the output image"}),
+                "pose_images": ("IMAGE", {"tooltip": "Per-frame source images to run DWPose keypoint detection on; output is a stylized pose-stick rendering matching the input frame count"}),
+                "score_threshold": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Per-keypoint confidence threshold; keypoints below this score are dropped (marked invisible) before drawing"}),
+                "stick_width": ("INT", {"default": 4, "min": 1, "max": 100, "step": 1, "tooltip": "Line thickness in pixels for the skeleton sticks connecting body keypoints"}),
+                "draw_body": ("BOOLEAN", {"default": True, "tooltip": "Draw the torso/limb skeleton sticks and body joints when on; skips the body skeleton entirely when off"}),
+                "body_keypoint_size": ("INT", {"default": 4, "min": 0, "max": 100, "step": 1, "tooltip": "Pixel radius of the dots drawn at each body joint; 0 hides the joint dots"}),
+                "draw_feet": ("BOOLEAN", {"default": True, "tooltip": "Draw the feet keypoints (ankles + toes, joints 18–19) when on; off skips them so only legs to ankle are drawn"}),
+                "draw_hands": ("BOOLEAN", {"default": True, "tooltip": "Draw the hand keypoint skeleton when on; off skips fingers/palms entirely"}),
+                "hand_keypoint_size": ("INT", {"default": 4, "min": 0, "max": 100, "step": 1, "tooltip": "Pixel radius of the dots drawn at each hand keypoint; 0 hides the dots and draws only the sticks"}),
+                "colorspace": (["RGB", "BGR"], {"tooltip": "Channel order of the output pose image; BGR matches OpenCV consumers, RGB matches the ComfyUI default"}),
                 "handle_not_detected": (["empty", "repeat"], {"default": "empty", "tooltip": "How to handle undetected poses, empty inserts black and repeat inserts previous detection"}),
-                "draw_head": ("BOOLEAN", {"default": True, "tooltip": "Draw head keypoints"}),
+                "draw_head": ("BOOLEAN", {"default": True, "tooltip": "Draw the head/face landmark sticks (eyes, nose, ears, joints 14–17) when on; off skips them"}),
             },
             "optional": {
-                "reference_pose_image": ("IMAGE", {"tooltip": "Reference pose image"}),
+                "reference_pose_image": ("IMAGE", {"tooltip": "Optional single reference image to extract a canonical pose from; output as the second pose return for UniAnimate's identity-aligning pose"}),
             },
         }
 
@@ -782,13 +782,13 @@ class WanVideoUniAnimatePoseInput:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "pose_images": ("IMAGE", {"tooltip": "Pose images"}),
-            "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Strength of the pose control"}),
-            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percentage for the pose control"}),
-            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percentage for the pose control"}),
+            "pose_images": ("IMAGE", {"tooltip": "Per-frame pose-stick images (typically from WanVideoUniAnimateDWPoseDetector) used as UniAnimate motion guidance"}),
+            "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Multiplier on the UniAnimate pose-guidance signal injected into the transformer; 1.0 is baseline, lower softens, 0 disables"}),
+            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start fraction (0-1) of total denoising steps at which UniAnimate pose guidance begins to apply"}),
+            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End fraction (0-1) of total denoising steps after which UniAnimate pose guidance stops; 1.0 applies through the final step"}),
             },
             "optional": {
-                "reference_pose_image": ("IMAGE", {"tooltip": "Reference pose image"}),
+                "reference_pose_image": ("IMAGE", {"tooltip": "Optional canonical reference pose image (single frame) used as the identity-aligning pose target for UniAnimate"}),
             },
         }
 

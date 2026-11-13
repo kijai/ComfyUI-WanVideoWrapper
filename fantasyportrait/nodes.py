@@ -102,14 +102,14 @@ class FantasyPortraitFaceDetector:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "portrait_model": ("FANTASYPORTRAITMODEL",),
-                "images": ("IMAGE",),
+                "portrait_model": ("FANTASYPORTRAITMODEL", {"tooltip": "Loaded FantasyPortrait adapter model that turns detected face features into cross-attention projections — connect from FantasyPortrait Model Loader"}),
+                "images": ("IMAGE", {"tooltip": "Driving-video frames containing the face to track; each frame is fed to the face detector + landmark model to extract per-frame emotion features"}),
             },
             "optional": {
-                "adapter_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Scale for the adapter projection"}),
-                "mouth_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Scale for the mouth projection"}),
-                "emo_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Scale for the emotion projection"}),
-                "device": (["cuda", "cpu"], {"default": "cuda", "tooltip": "Device to run the model on"}),
+                "adapter_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Overall strength of the portrait adapter projection (head pose + eyes + emotion + mouth combined); 1.0 is the trained default"}),
+                "mouth_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Strength of the mouth-feature channel only; raise to exaggerate lip motion, lower to mute it"}),
+                "emo_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Strength of the eye + emotion-embedding channels; raise to exaggerate expression, lower for a more neutral face"}),
+                "device": (["cuda", "cpu"], {"default": "cuda", "tooltip": "Device to run the face detector / landmark ONNX models on; cuda is faster but uses the same GPU as diffusion"}),
             }
         }
 
@@ -171,13 +171,13 @@ class LandmarksToImage:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "landmarks": ("LANDMARKS", {"default": []}),
-            "width": ("INT", {"default": 512, "min": 1, "max": 2048, "step": 1, "tooltip": "Width of the output image"}),
-            "height": ("INT", {"default": 512, "min": 1, "max": 2048, "step": 1, "tooltip": "Height of the output image"}),
+            "landmarks": ("LANDMARKS", {"default": [], "tooltip": "Per-frame 2D facial landmark coordinates produced by FantasyPortrait Face Detector"}),
+            "width": ("INT", {"default": 512, "min": 1, "max": 2048, "step": 1, "tooltip": "Output canvas width in pixels (ignored if an input image is wired — landmarks are drawn on top of it)"}),
+            "height": ("INT", {"default": 512, "min": 1, "max": 2048, "step": 1, "tooltip": "Output canvas height in pixels (ignored if an input image is wired — landmarks are drawn on top of it)"}),
            
             },
             "optional": {
-                "image": ("IMAGE", ),
+                "image": ("IMAGE",  {"tooltip": "Optional background image(s) to draw the landmarks on top of; when wired, width/height are ignored and the image's resolution is used instead"}),
             },
         }
 
@@ -215,12 +215,12 @@ class WanVideoAddFantasyPortrait:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "portrait_embeds": ("PORTRAIT_EMBEDS",),
-                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the portrait embedding"}),
-                    "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percentage of the embedding application"}),
-                    "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percentage of the embedding application"}),
-                    "portrait_cfg": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 20.0, "step": 0.01, "tooltip": "CFG scale for the portrait embedding"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing Wan image-embeds bundle to extend with portrait conditioning — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / any other embeds producer"}),
+                    "portrait_embeds": ("PORTRAIT_EMBEDS", {"tooltip": "Per-frame portrait projections extracted from a driving video — connect from FantasyPortrait Face Detector"}),
+                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the portrait conditioning applied to the cross-attention; 1.0 is the trained default, higher = stronger face-driving"}),
+                    "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start of the denoising schedule (0–1) at which the portrait embedding becomes active"}),
+                    "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End of the denoising schedule (0–1) after which the portrait embedding is dropped"}),
+                    "portrait_cfg": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 20.0, "step": 0.01, "tooltip": "When != 1.0, an extra model pass without the portrait embedding is done for portrait-specific CFG; slower but allows fine control over how much the face drives motion"}),
                 }
         }
 
@@ -249,7 +249,7 @@ class FantasyPortraitModelLoader:
             "required": {
                 "model": (folder_paths.get_filename_list("diffusion_models"), {"tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' -folder",}),
 
-            "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16"}),
+            "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16", "tooltip": "Computation/storage dtype for the portrait adapter weights; fp16 is the safe default, fp32 is most accurate but uses more VRAM"}),
             },
         }
 

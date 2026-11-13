@@ -79,9 +79,9 @@ class QwenLoader:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "model": (folder_paths.get_filename_list("text_encoders"), ),
-            "load_device": (["main_device", "offload_device"], {"advanced": True}),
-            "precision": (["fp16", "bf16", "fp32"], {"default": "bf16"}),
+            "model": (folder_paths.get_filename_list("text_encoders"),  {"tooltip": "Qwen2 LLM checkpoint to load for prompt extension; reads from ComfyUI/models/text_encoders. 3B vs 7B variant is auto-detected from '3b' in the filename."}),
+            "load_device": (["main_device", "offload_device"], {"advanced": True, "tooltip": "Where to load the model initially — main_device for GPU (fast), offload_device for CPU (saves VRAM at the cost of per-call transfer time)"}),
+            "precision": (["fp16", "bf16", "fp32"], {"default": "bf16", "tooltip": "Weight storage / compute dtype. bf16 matches the Qwen2 training dtype (recommended), fp16 saves slightly less VRAM but can over/underflow on some prompts, fp32 is most accurate but doubles VRAM use"}),
         },
     }
     RETURN_TYPES = ("QWENMODEL",)
@@ -144,16 +144,16 @@ class WanVideoPromptExtender:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "qwen": ("QWENMODEL", ),
-            "prompt": ("STRING", {"multiline": True}),
-            "max_new_tokens": ("INT", {"default": 512, "min": 1, "max": 2048, "step": 1, "tooltip": "Maximum number of new tokens to generate."}),
-            "device": (["gpu", "cpu"], {"default": "gpu", "tooltip": "Device to run the model on. Default uses the main device."}),
-            "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Force offload the model to the offload device after generation. Useful for large models."})
+            "qwen": ("QWENMODEL",  {"tooltip": "Loaded Qwen2 LLM (tokenizer + model) bundle — connect from QwenLoader"}),
+            "prompt": ("STRING", {"multiline": True, "tooltip": "User prompt to expand. The Qwen2 LLM rewrites this into a longer, more detailed prompt suitable for Wan video generation, guided by the chosen system_prompt"}),
+            "max_new_tokens": ("INT", {"default": 512, "min": 1, "max": 2048, "step": 1, "tooltip": "Upper bound on the length (in tokens) of the expanded prompt. Higher = potentially more detail but slower; 512 is usually enough for one paragraph"}),
+            "device": (["gpu", "cpu"], {"default": "gpu", "tooltip": "Device to run the LLM forward on. GPU is much faster; CPU is a fallback when VRAM is exhausted"}),
+            "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Move the LLM weights to the offload device and clear VRAM cache after generation. Strongly recommended — frees ~6-16 GB so the diffusion model can run"})
         },
         "optional": {
-            "system_prompt": (SYSTEM_PROMPT_KEYS, {"tooltip": "System prompt to use for the model."}),
-            "custom_system_prompt": ("STRING", {"default": "", "forceInput": True, "tooltip": "Custom system prompt to use instead of the predefined ones."}),
-            "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+            "system_prompt": (SYSTEM_PROMPT_KEYS, {"tooltip": "Pick a built-in system prompt from system_prompt.py — controls how the LLM rewrites the user prompt (e.g. T2V vs I2V style, NSFW, cinematic, etc.). Overridden by custom_system_prompt when wired"}),
+            "custom_system_prompt": ("STRING", {"default": "", "forceInput": True, "tooltip": "Free-form system prompt that overrides the system_prompt selection when wired in. Use to inject your own rewrite instructions"}),
+            "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "RNG seed for the LLM sampler (temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05). Different seeds give different rewrites of the same prompt"}),
         }
         }
     RETURN_TYPES = ("STRING",)
@@ -206,13 +206,13 @@ class WanVideoPromptExtenderSelect:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "model": (folder_paths.get_filename_list("text_encoders"), ),
-            "max_new_tokens": ("INT", {"default": 512, "min": 1, "max": 2048, "step": 1, "tooltip": "Maximum number of new tokens to generate."}),
-            "system_prompt": (SYSTEM_PROMPT_KEYS, {"tooltip": "System prompt to use for the model."}),
+            "model": (folder_paths.get_filename_list("text_encoders"),  {"tooltip": "Qwen2 LLM checkpoint name (in ComfyUI/models/text_encoders) to pass through in the settings bundle. The model is loaded lazily by the consumer node, not here"}),
+            "max_new_tokens": ("INT", {"default": 512, "min": 1, "max": 2048, "step": 1, "tooltip": "Upper bound on the length (in tokens) of the expanded prompt. Higher = potentially more detail but slower; 512 is usually enough for one paragraph"}),
+            "system_prompt": (SYSTEM_PROMPT_KEYS, {"tooltip": "Pick a built-in system prompt from system_prompt.py — controls how the LLM rewrites the user prompt (e.g. T2V vs I2V style, NSFW, cinematic, etc.). Overridden by custom_system_prompt when wired"}),
         },
         "optional": {
-            "custom_system_prompt": ("STRING", {"default": "", "forceInput": True, "tooltip": "Custom system prompt to use instead of the predefined ones."}),
-            "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+            "custom_system_prompt": ("STRING", {"default": "", "forceInput": True, "tooltip": "Free-form system prompt that overrides the system_prompt selection when wired in. Use to inject your own rewrite instructions"}),
+            "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "RNG seed for the LLM sampler (temperature=0.7, top_p=0.8, top_k=20, repetition_penalty=1.05). Different seeds give different rewrites of the same prompt"}),
         }
         }
     RETURN_TYPES = ("WANVIDEOPROMPTEXTENDER_ARGS",)

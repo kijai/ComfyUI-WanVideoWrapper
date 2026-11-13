@@ -23,9 +23,9 @@ class DownloadAndLoadWav2VecModel:
                     "TencentGameMate/chinese-wav2vec2-base",
                     "facebook/wav2vec2-base-960h"
                     ],
-                ),
+                 {"tooltip": "Wav2Vec2 repo to auto-download into 'ComfyUI/models/transformers/'; FantasyTalking was trained against the Tencent Chinese variant"}),
 
-            "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16"}),
+            "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16", "tooltip": "Computation/storage dtype for the wav2vec2 model weights; fp16 is the safe default, fp32 is most accurate but uses more VRAM"}),
             "load_device": (["main_device", "offload_device"], {"default": "main_device", "tooltip": "Initial device to load the model to, NOT recommended with the larger models unless you have 48GB+ VRAM"}),
             },
         }
@@ -89,7 +89,7 @@ class FantasyTalkingModelLoader:
             "required": {
                 "model": (folder_paths.get_filename_list("diffusion_models"), {"tooltip": "These models are loaded from the 'ComfyUI/models/diffusion_models' -folder",}),
 
-            "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16"}),
+            "base_precision": (["fp32", "bf16", "fp16"], {"default": "fp16", "tooltip": "Computation/storage dtype for the audio projection model; fp16 is the safe default, fp32 is most accurate but uses more VRAM"}),
             },
         }
 
@@ -126,12 +126,12 @@ class FantasyTalkingWav2VecEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "wav2vec_model": ("WAV2VECMODEL",),
-            "fantasytalking_model": ("FANTASYTALKINGMODEL",),
-            "audio": ("AUDIO",),
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 1000, "step": 1}),
-            "fps": ("FLOAT", {"default": 23.0, "min": 1.0, "max": 60.0, "step": 0.1}),
-            "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.1, "tooltip": "Strength of the audio conditioning"}),
+            "wav2vec_model": ("WAV2VECMODEL", {"tooltip": "Loaded wav2vec2 audio encoder used to extract per-frame audio features — connect from (Down)load Wav2Vec Model"}),
+            "fantasytalking_model": ("FANTASYTALKINGMODEL", {"tooltip": "Loaded FantasyTalking audio projection model that maps wav2vec features into the Wan cross-attention space — connect from FantasyTalking Model Loader"}),
+            "audio": ("AUDIO", {"tooltip": "Speaker audio waveform; resampled to 16 kHz and trimmed to num_frames / fps seconds before encoding"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 1000, "step": 1, "tooltip": "Total frame count to generate; audio is trimmed to num_frames / fps seconds"}),
+            "fps": ("FLOAT", {"default": 23.0, "min": 1.0, "max": 60.0, "step": 0.1, "tooltip": "Frames per second of the output video — used to align the wav2vec embeddings to the video timeline"}),
+            "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.1, "tooltip": "Strength of the audio conditioning applied to the cross-attention; higher = more pronounced lip motion, 1.0 is the trained default"}),
             "audio_cfg_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.1, "tooltip": "When not 1.0, an extra model pass without audio conditioning is done: slower inference but more motion is allowed"}),
             },
         }

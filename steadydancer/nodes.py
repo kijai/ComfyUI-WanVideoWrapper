@@ -19,16 +19,16 @@ class WanVideoAddSteadyDancerEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "pose_latents_positive": ("LATENT",),
-                    "pose_strength_spatial": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the pose embedding"}),
-                    "pose_strength_temporal": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the pose embedding"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Base image embeds to extend with SteadyDancer pose conditioning — connect from a WanVideo*Embeds producer"}),
+                    "pose_latents_positive": ("LATENT", {"tooltip": "Encoded positive pose latents (target dance motion) used as the conditional signal for SteadyDancer"}),
+                    "pose_strength_spatial": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength applied to the spatial component of the SteadyDancer pose conditioning (per-frame pose alignment)"}),
+                    "pose_strength_temporal": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength applied to the temporal component of the SteadyDancer pose conditioning (motion-smoothness across frames)"}),
                     "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percentage of the embedding application"}),
                     "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percentage of the embedding application"}),
                 },
                 "optional": {
-                    "pose_latents_negative": ("LATENT",),
-                    "clip_vision_embeds": ("WANVIDIMAGE_CLIPEMBEDS",),
+                    "pose_latents_negative": ("LATENT", {"tooltip": "Optional encoded negative pose latents subtracted from the positive pose signal to suppress unwanted poses (CFG-style)"}),
+                    "clip_vision_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "Optional CLIP vision embeds of a reference appearance image — connect from WanVideoClipVisionEncode"}),
                     
                 }
         }

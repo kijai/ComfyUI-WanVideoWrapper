@@ -20,18 +20,18 @@ class WanVideoImageClipEncode:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "clip_vision": ("CLIP_VISION",),
-            "image": ("IMAGE", {"tooltip": "Image to encode"}),
-            "vae": ("WANVAE",),
-            "generation_width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Width of the image to encode"}),
-            "generation_height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Height of the image to encode"}),
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
+            "clip_vision": ("CLIP_VISION", {"tooltip": "[Deprecated — see WanVideoImageToVideoEncode] CLIP vision encoder used to extract image embeddings — connect from a CLIP vision loader"}),
+            "image": ("IMAGE", {"tooltip": "[Deprecated — see WanVideoImageToVideoEncode] Start-frame image to encode for I2V conditioning"}),
+            "vae": ("WANVAE", {"tooltip": "[Deprecated — see WanVideoImageToVideoEncode] Wan VAE used to encode the image into latent space — connect from WanVideoVAELoader"}),
+            "generation_width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "[Deprecated — see WanVideoImageToVideoEncode] Target generation width in pixels; image is resized/cropped to fit"}),
+            "generation_height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "[Deprecated — see WanVideoImageToVideoEncode] Target generation height in pixels; image is resized/cropped to fit"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "[Deprecated — see WanVideoImageToVideoEncode] Number of output frames in the generated clip (step of 4 matches VAE temporal stride)"}),
             },
             "optional": {
-                "force_offload": ("BOOLEAN", {"default": True}),
+                "force_offload": ("BOOLEAN", {"default": True, "tooltip": "[Deprecated — see WanVideoImageToVideoEncode] Move CLIP vision model to offload_device after encoding to free VRAM"}),
                 "noise_aug_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Strength of noise augmentation, helpful for I2V where some noise can add motion and give sharper results"}),
                 "latent_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional latent multiplier, helpful for I2V where lower values allow for more motion"}),
-                "clip_embed_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional clip embed multiplier"}),
+                "clip_embed_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "[Deprecated — see WanVideoImageToVideoEncode] Multiplier applied to the CLIP-vision image embedding before sampling; lower weakens image conditioning"}),
                 "adjust_resolution": ("BOOLEAN", {"default": True, "tooltip": "Performs the same resolution adjustment as in the original code"}),
 
             }

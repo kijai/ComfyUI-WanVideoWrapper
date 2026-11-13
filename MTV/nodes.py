@@ -47,7 +47,7 @@ class DownloadAndLoadNLFModel:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "url": (model_list, {"default": "https://github.com/isarandi/nlf/releases/download/v0.3.2/nlf_l_multi_0.3.2.torchscript"}),
+                "url": (model_list, {"default": "https://github.com/isarandi/nlf/releases/download/v0.3.2/nlf_l_multi_0.3.2.torchscript", "tooltip": "Source URL for the NLF (Neural Localizer Fields) SMPL pose model; auto-downloaded into ComfyUI/models/nlf on first use"}),
              },
              "optional": {
                  "warmup": ("BOOLEAN", {"default": True, "tooltip": "Whether to warmup the model after loading"}),
@@ -176,8 +176,8 @@ class MTVCrafterEncodePoses:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "vqvae": ("VQVAE", {"tooltip": "VQVAE model"}),
-                "poses": ("NLFPRED", {"tooltip": "Input poses for the model"}),
+                "vqvae": ("VQVAE", {"tooltip": "MTVCrafter motion VQ-VAE — connect from LoadVQVAE (encodes SMPL pose sequences into motion tokens)"}),
+                "poses": ("NLFPRED", {"tooltip": "NLF SMPL pose predictions to tokenize — connect from NLFPredict"}),
             },
         }
 
@@ -218,8 +218,8 @@ class NLFPredict:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "model": ("NLFMODEL",),
-            "images": ("IMAGE", {"tooltip": "Input images for the model"}),
+            "model": ("NLFMODEL", {"tooltip": "NLF SMPL pose detector — connect from LoadNLFModel or DownloadAndLoadNLFModel"}),
+            "images": ("IMAGE", {"tooltip": "Per-frame images to run NLF SMPL pose detection on; returns 3D joint predictions and per-frame bounding boxes"}),
             },
             "optional": {
                 "per_batch": ("INT", {"default": -1, "min": -1, "max": 10000, "step": 1, "tooltip": "How many images to process at once. -1 means all at once."}),
@@ -294,14 +294,14 @@ class DrawNLFPoses:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "poses": ("NLFPRED", {"tooltip": "Input poses for the model"}),
-            "width": ("INT", {"default": 512}),
-            "height": ("INT", {"default": 512}),
+            "poses": ("NLFPRED", {"tooltip": "NLF SMPL pose predictions to render — connect from NLFPredict"}),
+            "width": ("INT", {"default": 512, "tooltip": "Output pose-image width in pixels; should match the canvas size of the target video"}),
+            "height": ("INT", {"default": 512, "tooltip": "Output pose-image height in pixels; should match the canvas size of the target video"}),
             },
             "optional": {
-                "stick_width": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 1000.0, "step": 0.01, "tooltip": "Stick width multiplier"}),
-                "point_radius": ("INT", {"default": 5, "min": 1, "max": 10, "step": 1, "tooltip": "Point radius for drawing the pose"}),
-                "style": (["original", "scail"], {"default": "original", "tooltip": "style of the pose drawing"}),
+                "stick_width": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 1000.0, "step": 0.01, "tooltip": "Pixel width of the limb lines connecting keypoints"}),
+                "point_radius": ("INT", {"default": 5, "min": 1, "max": 10, "step": 1, "tooltip": "Pixel radius of the keypoint dots drawn on each joint"}),
+                "style": (["original", "scail"], {"default": "original", "tooltip": "Pose-drawing style — 'original' is the default MTVCrafter look, 'scail' matches the SCAIL controlnet's expected input"}),
             }
     }
 

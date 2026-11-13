@@ -34,8 +34,8 @@ class WanVideoReCamMasterDefaultCamera:
                 "translate_down",
                 "arc_left",
                 "arc_right",
-                ], {"default": "pan_right", "tooltip": "Camera type to use"}),
-            "latents": ("LATENT", {"tooltip": "source video"}),
+                ], {"default": "pan_right", "tooltip": "Preset camera move loaded from recam_extrinsics.json — pan/tilt rotate in place, zoom changes focal distance, translate moves the camera body, arc orbits around the subject"}),
+            "latents": ("LATENT", {"tooltip": "Encoded source video latents used to determine frame count and spatial dimensions for the camera trajectory"}),
         },
         }
 
@@ -79,8 +79,8 @@ class WanVideoReCamMasterGenerateOrbitCamera:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 1000, "step": 1, "tooltip": "Number of frames to generate"}),
-            "degrees": ("INT", {"default": 90, "min": -180, "max": 180, "step": 1, "tooltip": "Degrees to orbit"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 1000, "step": 1, "tooltip": "Length of the orbit trajectory in source-video frames; should match the target video's frame count"}),
+            "degrees": ("INT", {"default": 90, "min": -180, "max": 180, "step": 1, "tooltip": "Total angular sweep of the orbit around the subject; positive = counter-clockwise, negative = clockwise"}),
         },
         }
 
@@ -140,8 +140,8 @@ class WanVideoReCamMasterCameraEmbed:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "camera_poses": ("CAMERAPOSES",),
-            "latents": ("LATENT", {"tooltip": "source video"}),
+            "camera_poses": ("CAMERAPOSES", {"tooltip": "Per-frame camera trajectory (4x4 c2w matrices) — connect from a ReCamMaster default / orbit / custom pose source"}),
+            "latents": ("LATENT", {"tooltip": "Encoded source video latents used to determine frame count and spatial dimensions for the camera trajectory"}),
         },
         }
 
@@ -222,11 +222,11 @@ class ReCamMasterPoseVisualizer:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "camera_poses": ("CAMERAPOSES",),
-            "base_xval": ("FLOAT", {"default": 0.2,"min": 0, "max": 100, "step": 0.01}),
-            "zval": ("FLOAT", {"default": 0.3,"min": 0, "max": 100, "step": 0.01}),
-            "scale": ("FLOAT", {"default": 1.0,"min": 0.01, "max": 10.0, "step": 0.01}),
-            "arrow_length": ("FLOAT", {"default": 1,"min": 0, "max": 100, "step": 0.01}),
+            "camera_poses": ("CAMERAPOSES", {"tooltip": "Per-frame camera trajectory to visualize as a sequence of frustums in a 3D plot"}),
+            "base_xval": ("FLOAT", {"default": 0.2,"min": 0, "max": 100, "step": 0.01, "tooltip": "Half-width of each camera-frustum pyramid's base (image plane); larger draws bigger frustums"}),
+            "zval": ("FLOAT", {"default": 0.3,"min": 0, "max": 100, "step": 0.01, "tooltip": "Forward depth of each camera-frustum pyramid (distance from camera origin to drawn image plane)"}),
+            "scale": ("FLOAT", {"default": 1.0,"min": 0.01, "max": 10.0, "step": 0.01, "tooltip": "Axis range of the 3D plot; larger zooms out to fit longer trajectories"}),
+            "arrow_length": ("FLOAT", {"default": 1,"min": 0, "max": 100, "step": 0.01, "tooltip": "Length of the forward-direction arrow drawn from each camera; 0 disables arrows"}),
             },
             }
     

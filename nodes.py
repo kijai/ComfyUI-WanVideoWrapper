@@ -26,7 +26,7 @@ class WanVideoEnhanceAVideo:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "weight": ("FLOAT", {"default": 2.0, "min": 0, "max": 100, "step": 0.01, "tooltip": "The feta Weight of the Enhance-A-Video"}),
+                "weight": ("FLOAT", {"default": 2.0, "min": 0, "max": 100, "step": 0.01, "tooltip": "Enhance-A-Video feature enhancement weight; higher values boost temporal/spatial coherence at the cost of motion magnitude. 2.0 is the paper default"}),
                 "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percentage of the steps to apply Enhance-A-Video"}),
                 "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percentage of the steps to apply Enhance-A-Video"}),
             },
@@ -45,10 +45,10 @@ class WanVideoSetBlockSwap:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model": ("WANVIDEOMODEL", ),
+                "model": ("WANVIDEOMODEL",  {"tooltip": "Wan diffusion model patcher to attach block-swap settings to — connect from WanVideoModelLoader"}),
                },
             "optional": {
-                "block_swap_args": ("BLOCKSWAPARGS", ),
+                "block_swap_args": ("BLOCKSWAPARGS",  {"tooltip": "Block-swap configuration (blocks_to_swap, offload_img_emb, offload_txt_emb) — connect from WanVideoBlockSwap"}),
                }
         }
 
@@ -72,14 +72,14 @@ class WanVideoSetRadialAttention:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model": ("WANVIDEOMODEL", ),
+                "model": ("WANVIDEOMODEL",  {"tooltip": "Wan diffusion model patcher with radial attention enabled in the loader — connect from WanVideoModelLoader"}),
                 "dense_attention_mode": ([
                     "sdpa",
                     "flash_attn_2",
                     "flash_attn_3",
                     "sageattn",
                     "sparse_sage_attention",
-                    ], {"default": "sageattn", "tooltip": "The attention mode for dense attention"}),
+                    ], {"default": "sageattn", "tooltip": "Attention backend used for the dense (non-radial) blocks — sageattn is the safe default; flash_attn_2/3 require those packages installed"}),
                 "dense_blocks": ("INT",  {"default": 1, "min": 0, "max": 40, "step": 1, "tooltip": "Number of blocks to apply normal attention to"}),
                 "dense_vace_blocks": ("INT",  {"default": 1, "min": 0, "max": 15, "step": 1, "tooltip": "Number of vace blocks to apply normal attention to"}),
                 "dense_timesteps": ("INT",  {"default": 2, "min": 0, "max": 100, "step": 1, "tooltip": "The step to start applying sparse attention"}),
@@ -116,7 +116,7 @@ class WanVideoBlockList:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "blocks": ("STRING",  {"default": "1", "multiline":True}),
+                "blocks": ("STRING",  {"default": "1", "multiline":True, "tooltip": "Comma-separated block indices and/or ranges (e.g. '0,2,3-5'); produces an INT list usable with dense_blocks on radial attention"}),
                }
         }
 
@@ -192,13 +192,13 @@ class WanVideoTextEncodeCached:
         return {"required": {
             "model_name": (folder_paths.get_filename_list("text_encoders"), {"tooltip": "These models are loaded from 'ComfyUI/models/text_encoders'"}),
             "precision": (["fp32", "bf16"],
-                    {"default": "bf16"}
+                    {"default": "bf16", "tooltip": "Compute precision the T5 runs at; bf16 is much faster on Ampere+ with negligible quality loss vs fp32. Note: fp8_scaled encoder files are rejected by this node — use a bf16/fp16/fp8_e4m3fn checkpoint"}
                 ),
-            "positive_prompt": ("STRING", {"default": "", "multiline": True} ),
-            "negative_prompt": ("STRING", {"default": "", "multiline": True} ),
-            "quantization": (['disabled', 'fp8_e4m3fn'], {"default": 'disabled', "tooltip": "optional quantization method"}),
+            "positive_prompt": ("STRING", {"default": "", "multiline": True, "tooltip": "Positive prompt; supports prompt travel via '|' and EchoShot multi-shot via [1]/[2]/... segment markers"} ),
+            "negative_prompt": ("STRING", {"default": "", "multiline": True, "tooltip": "Negative prompt — concepts to push the output away from"} ),
+            "quantization": (['disabled', 'fp8_e4m3fn'], {"default": 'disabled', "tooltip": "Runtime quantization of the T5 weights; fp8_e4m3fn halves VRAM at minor quality cost"}),
             "use_disk_cache": ("BOOLEAN", {"default": True, "tooltip": "Cache the text embeddings to disk for faster re-use, under the custom_nodes/ComfyUI-WanVideoWrapper/text_embed_cache directory"}),
-            "device": (["gpu", "cpu"], {"default": "gpu", "tooltip": "Device to run the text encoding on."}),
+            "device": (["gpu", "cpu"], {"default": "gpu", "tooltip": "Device to run the text encoding on; CPU is slower but frees VRAM for the diffusion pass"}),
             },
             "optional": {
                 "extender_args": ("WANVIDEOPROMPTEXTENDER_ARGS", {"tooltip": "Use this node to extend the prompt with additional text."}),
@@ -286,15 +286,15 @@ class WanVideoTextEncode:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "positive_prompt": ("STRING", {"default": "", "multiline": True} ),
-            "negative_prompt": ("STRING", {"default": "", "multiline": True} ),
+            "positive_prompt": ("STRING", {"default": "", "multiline": True, "tooltip": "Positive prompt; supports per-prompt weights via (text:weight), prompt travel by joining with '|', and EchoShot multi-shot via [1]/[2]/... segment markers"} ),
+            "negative_prompt": ("STRING", {"default": "", "multiline": True, "tooltip": "Negative prompt — concepts to push the output away from"} ),
             },
             "optional": {
-                "t5": ("WANTEXTENCODER",),
-                "force_offload": ("BOOLEAN", {"default": True}),
+                "t5": ("WANTEXTENCODER", {"tooltip": "Wan UMT5 text encoder — load via WanVideoLoadT5TextEncoder. Optional only when use_disk_cache hits a fresh cache entry"}),
+                "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Move the T5 encoder to the offload device after encoding to free VRAM"}),
                 "model_to_offload": ("WANVIDEOMODEL", {"tooltip": "Model to move to offload_device before encoding"}),
                 "use_disk_cache": ("BOOLEAN", {"default": False, "tooltip": "Cache the text embeddings to disk for faster re-use, under the custom_nodes/ComfyUI-WanVideoWrapper/text_embed_cache directory"}),
-                "device": (["gpu", "cpu"], {"default": "gpu", "tooltip": "Device to run the text encoding on."}),
+                "device": (["gpu", "cpu"], {"default": "gpu", "tooltip": "Device to run the text encoding on; CPU is slower but frees VRAM for the diffusion pass"}),
             }
         }
 
@@ -457,14 +457,14 @@ class WanVideoTextEncodeSingle:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "prompt": ("STRING", {"default": "", "multiline": True} ),
+            "prompt": ("STRING", {"default": "", "multiline": True, "tooltip": "Text prompt to encode into Wan T5 embeddings — feeds either the positive or negative slot of a sampler"} ),
             },
             "optional": {
-                "t5": ("WANTEXTENCODER",),
-                "force_offload": ("BOOLEAN", {"default": True}),
+                "t5": ("WANTEXTENCODER", {"tooltip": "Wan UMT5 text encoder — load via WanVideoLoadT5TextEncoder. Optional only when use_disk_cache hits a fresh cache entry"}),
+                "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Move the T5 encoder to the offload device after encoding to free VRAM"}),
                 "model_to_offload": ("WANVIDEOMODEL", {"tooltip": "Model to move to offload_device before encoding"}),
                 "use_disk_cache": ("BOOLEAN", {"default": False, "tooltip": "Cache the text embeddings to disk for faster re-use, under the custom_nodes/ComfyUI-WanVideoWrapper/text_embed_cache directory"}),
-                "device": (["gpu", "cpu"], {"default": "gpu", "tooltip": "Device to run the text encoding on."}),
+                "device": (["gpu", "cpu"], {"default": "gpu", "tooltip": "Device to run the text encoding on; CPU is slower but frees VRAM for the diffusion pass"}),
             }
         }
 
@@ -553,11 +553,11 @@ class WanVideoApplyNAG:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "original_text_embeds": ("WANVIDEOTEXTEMBEDS",),
-            "nag_text_embeds": ("WANVIDEOTEXTEMBEDS",),
-            "nag_scale": ("FLOAT", {"default": 11.0, "min": 0.0, "max": 100.0, "step": 0.1}),
-            "nag_tau": ("FLOAT", {"default": 2.5, "min": 0.0, "max": 10.0, "step": 0.1}),
-            "nag_alpha": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.01}),
+            "original_text_embeds": ("WANVIDEOTEXTEMBEDS", {"tooltip": "Base positive/negative text embeds the NAG guidance is added on top of — connect from WanVideoTextEncode / WanVideoTextEncodeCached"}),
+            "nag_text_embeds": ("WANVIDEOTEXTEMBEDS", {"tooltip": "Extra negative-direction embeds whose contribution is suppressed via Normalized Attention Guidance — typically a second WanVideoTextEncode encoding the things you want to push away from"}),
+            "nag_scale": ("FLOAT", {"default": 11.0, "min": 0.0, "max": 100.0, "step": 0.1, "tooltip": "NAG guidance scale; how strongly the negative direction is suppressed (analogous to CFG strength)"}),
+            "nag_tau": ("FLOAT", {"default": 2.5, "min": 0.0, "max": 10.0, "step": 0.1, "tooltip": "NAG clipping threshold on the guided/positive ratio; lower = more aggressive clamping"}),
+            "nag_alpha": ("FLOAT", {"default": 0.25, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Blend between original and NAG-guided embeds (0 = original only, 1 = full NAG)"}),
             },
             "optional": {
                 "inplace": ("BOOLEAN", {"default": True, "tooltip": "If true, modifies tensors in place to save memory. Leads to different numerical results which may change the output slightly."}),
@@ -587,10 +587,10 @@ class WanVideoTextEmbedBridge:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "positive": ("CONDITIONING",),
+            "positive": ("CONDITIONING", {"tooltip": "Positive prompt CONDITIONING from a ComfyUI core CLIPTextEncode (or compatible) — repackaged into the wrapper's WANVIDEOTEXTEMBEDS format"}),
             },
             "optional": {
-                "negative": ("CONDITIONING",),
+                "negative": ("CONDITIONING", {"tooltip": "Negative prompt CONDITIONING from a ComfyUI core CLIPTextEncode — optional; if omitted, the bridge produces a positive-only embed bundle"}),
             }
         }
 
@@ -612,19 +612,19 @@ class WanVideoClipVisionEncode:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "clip_vision": ("CLIP_VISION",),
-            "image_1": ("IMAGE", {"tooltip": "Image to encode"}),
-            "strength_1": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional clip embed multiplier"}), 
-            "strength_2": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional clip embed multiplier"}),
-            "crop": (["center", "disabled"], {"default": "center", "tooltip": "Crop image to 224x224 before encoding"}),
-            "combine_embeds": (["average", "sum", "concat", "batch"], {"default": "average", "tooltip": "Method to combine multiple clip embeds"}),
-            "force_offload": ("BOOLEAN", {"default": True}),
+            "clip_vision": ("CLIP_VISION", {"tooltip": "CLIP vision encoder (ViT) used to embed the input image(s) — typically loaded with the core CLIPVisionLoader from a Wan-compatible CLIP-ViT-H/L model"}),
+            "image_1": ("IMAGE", {"tooltip": "Primary image (IMAGE, HxWx3 in [0,1]) to CLIP-encode for I2V conditioning — usually the start frame; resized internally"}),
+            "strength_1": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Multiplier applied to image_1's CLIP embedding before combining; 0 disables it, 1.0 = full strength"}), 
+            "strength_2": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Multiplier applied to image_2's CLIP embedding before combining; 0 disables it, 1.0 = full strength"}),
+            "crop": (["center", "disabled"], {"default": "center", "tooltip": "Center-crop input to 224x224 before CLIP encoding (preserves CLIP's training distribution); disabled lets the preprocessor stretch to fit"}),
+            "combine_embeds": (["average", "sum", "concat", "batch"], {"default": "average", "tooltip": "How to merge embeddings from multiple input images: average / sum blend, concat extends along the token axis, batch keeps them separate"}),
+            "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Move the CLIP vision model to the offload device after encoding to free VRAM"}),
             },
             "optional": {
-                "image_2": ("IMAGE", ),
-                "negative_image": ("IMAGE", {"tooltip": "image to use for uncond"}),
+                "image_2": ("IMAGE",  {"tooltip": "Optional second image (IMAGE, HxWx3 in [0,1]) — typically the end frame for FLF2V; combined with image_1 according to combine_embeds"}),
+                "negative_image": ("IMAGE", {"tooltip": "Optional image whose CLIP embedding is used for the negative (uncond) branch — leave empty to use zero embeds for uncond"}),
                 "tiles": ("INT", {"default": 0, "min": 0, "max": 16, "step": 2, "tooltip": "Use matteo's tiled image encoding for improved accuracy"}),
-                "ratio": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Ratio of the tile average"}),
+                "ratio": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Blend ratio between tiled per-tile embeddings and the whole-image average; 0 = average only, 1 = tiles only"}),
             }
         }
 
@@ -706,13 +706,13 @@ class WanVideoRealisDanceLatents:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "ref_latent": ("LATENT", {"tooltip": "Reference image to encode"}),
-            "pose_cond_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the SMPL model"}),
-            "pose_cond_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the SMPL model"}),
+            "ref_latent": ("LATENT", {"tooltip": "VAE-encoded reference image latent providing the identity/appearance target for RealisDance pose-driven video — encode the reference frame with WanVideoEncode"}),
+            "pose_cond_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start of the step range (0-1 = fraction of total steps) where the SMPL/Hamer pose conditioning is active"}),
+            "pose_cond_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End of the step range (0-1 = fraction of total steps) where the SMPL/Hamer pose conditioning is active"}),
             },
             "optional": {
-                "smpl_latent": ("LATENT", {"tooltip": "SMPL pose image to encode"}),
-                "hamer_latent": ("LATENT", {"tooltip": "Hamer hand pose image to encode"}),
+                "smpl_latent": ("LATENT", {"tooltip": "VAE-encoded SMPL body-pose video latent (rendered SMPL mesh frames per output frame) driving body motion — encode the SMPL render with WanVideoEncode; at least one of smpl_latent / hamer_latent must be provided"}),
+                "hamer_latent": ("LATENT", {"tooltip": "VAE-encoded HaMeR hand-pose video latent (rendered hand-mesh frames per output frame) driving hand motion — encode the HaMeR render with WanVideoEncode; at least one of smpl_latent / hamer_latent must be provided"}),
             },
         }
 
@@ -749,8 +749,8 @@ class WanVideoAddStandInLatent:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "ip_image_latent": ("LATENT", {"tooltip": "Reference image to encode"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing image-embeds bundle to attach the StandIn IP-reference to — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / etc."}),
+                    "ip_image_latent": ("LATENT", {"tooltip": "VAE-encoded reference image latent for the StandIn IP-Adapter-style identity injection — encode the reference frame with WanVideoEncode"}),
                     "freq_offset": ("INT", {"default": 1, "min": 0, "max": 100, "step": 1, "tooltip": "EXPERIMENTAL: RoPE frequency offset between the reference and rest of the sequence"}),
                     #"start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent to apply the ref "}),
                     #"end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent to apply the ref "}),
@@ -780,11 +780,11 @@ class WanVideoAddBindweaveEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "reference_latents": ("LATENT", {"tooltip": "Reference image to encode"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing image-embeds bundle to attach Bindweave reference identities to — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / etc."}),
+                    "reference_latents": ("LATENT", {"tooltip": "VAE-encoded reference image latents (up to 4 frames in the batch dim) supplying identity/appearance targets for Bindweave — encode the references with WanVideoEncode"}),
                 }, 
                 "optional": {
-                    "ref_masks": ("MASK", {"tooltip": "Reference mask to encode"}),
+                    "ref_masks": ("MASK", {"tooltip": "Per-reference soft mask (MASK, one per reference image) marking the region of each reference to attend to; resized internally to latent resolution. Optional — full-image mask if omitted"}),
                     "qwenvl_embeds_pos": ("QWENVL_EMBEDS", {"tooltip": "Qwen-VL image embeddings for the reference image"}),
                     "qwenvl_embeds_neg": ("QWENVL_EMBEDS", {"tooltip": "Qwen-VL image embeddings for the reference image"}),
                 }
@@ -841,11 +841,11 @@ class TextImageEncodeQwenVL():
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "clip": ("CLIP",),
-                    "prompt": ("STRING", {"default": "", "multiline": True}),
+                    "clip": ("CLIP", {"tooltip": "Qwen2.5-VL multimodal CLIP loaded with the core CLIPLoader (type=qwen_image) — supplies both the text tokenizer and the vision branch for Bindweave's image-aware prompt"}),
+                    "prompt": ("STRING", {"default": "", "multiline": True, "tooltip": "Text prompt encoded together with the optional reference image via Qwen-VL; produces multimodal embeds for Bindweave"}),
                 }, 
                 "optional": {
-                    "image": ("IMAGE", ),
+                    "image": ("IMAGE",  {"tooltip": "Optional reference image (IMAGE, HxWx3 in [0,1]) embedded via Qwen-VL's vision tokens alongside the text prompt. If omitted, only text is encoded"}),
                 }
         }
 
@@ -872,11 +872,11 @@ class WanVideoAddMTVMotion:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "mtv_crafter_motion": ("MTVCRAFTERMOTION",),
-                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the MTV motion"}),
-                    "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent to apply the ref "}),
-                    "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent to apply the ref "}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing image-embeds bundle to attach MTV-Crafter motion tokens to — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / etc."}),
+                    "mtv_crafter_motion": ("MTVCRAFTERMOTION", {"tooltip": "MTV-Crafter motion tokens bundle (motion latents + global mean/std) — produced by the MTV-Crafter motion loader"}),
+                    "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Multiplier on the MTV motion contribution; 0 disables, 1.0 = full strength"}),
+                    "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start of the step range (0-1 = fraction of total steps) where the MTV motion conditioning is applied"}),
+                    "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End of the step range (0-1 = fraction of total steps) where the MTV motion conditioning is applied"}),
                 }
         }
 
@@ -905,9 +905,9 @@ class WanVideoAddStoryMemLatents:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "vae": ("WANVAE",),
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "memory_images": ("IMAGE",),
+                    "vae": ("WANVAE", {"tooltip": "Wan VAE used to encode memory_images into latents — connect from WanVideoVAELoader"}),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing image-embeds bundle to attach Story-Mem reference latents to — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / etc."}),
+                    "memory_images": ("IMAGE", {"tooltip": "Batch of reference frames (IMAGE, BxHxWx3 in [0,1]) encoded into Story-Mem memory latents — typically prior scene frames whose composition/identity the next generation should remember"}),
                     "rope_negative_offset": ("BOOLEAN", {"default": False, "tooltip": "Use positive RoPE frequency offset for the memory latents"}),
                     "rope_negative_offset_frames": ("INT", {"default": 5, "min": 0, "max": 100, "step": 1, "tooltip": "RoPE frequency offset for the memory latents"}),
                 }
@@ -930,12 +930,12 @@ class WanVideoSVIProEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "anchor_samples": ("LATENT", {"tooltip": "Initial start image encoded"}),
-                    "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
+                    "anchor_samples": ("LATENT", {"tooltip": "VAE-encoded latent of the anchor (start) image used as the appearance anchor for SVI 2.0 Pro extension — encode the start frame with WanVideoEncode"}),
+                    "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of output video frames; must be 4n+1 (auto-rounded). 81 frames = ~5s at 16fps Wan training rate"}),
                 },
                 "optional": {
-                    "prev_samples": ("LATENT", {"tooltip": "Last latent from previous generation"}),
-                    "motion_latent_count": ("INT", {"default": 1, "min": 0, "max": 100, "step": 1, "tooltip": "Number of latents used to continue"}),
+                    "prev_samples": ("LATENT", {"tooltip": "Latent output of the previous SVI 2.0 Pro clip — the trailing motion_latent_count frames are copied in to seed continuity with the next chunk. Connect WanVideoSampler's samples from the previous run"}),
+                    "motion_latent_count": ("INT", {"default": 1, "min": 0, "max": 100, "step": 1, "tooltip": "Number of trailing latents copied from prev_samples to seed motion in the next clip; 0 starts cold from the anchor only"}),
                 }
         }
 
@@ -986,25 +986,25 @@ class WanVideoImageToVideoEncode:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Width of the image to encode"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Height of the image to encode"}),
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent width in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent height in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of output video frames; must be 4n+1 (auto-rounded). 81 frames = ~5s at 16fps Wan training rate"}),
             "noise_aug_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Strength of noise augmentation, helpful for I2V where some noise can add motion and give sharper results"}),
             "start_latent_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional latent multiplier, helpful for I2V where lower values allow for more motion"}),
             "end_latent_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional latent multiplier, helpful for I2V where lower values allow for more motion"}),
-            "force_offload": ("BOOLEAN", {"default": True}),
+            "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Move the VAE to the offload device after encoding to free VRAM"}),
             },
             "optional": {
-                "vae": ("WANVAE",),
-                "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "Clip vision encoded image"}),
-                "start_image": ("IMAGE", {"tooltip": "Image to encode"}),
-                "end_image": ("IMAGE", {"tooltip": "end frame"}),
-                "control_embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Control signal for the Fun -model"}),
+                "vae": ("WANVAE", {"tooltip": "Wan VAE used to encode start/end images into latents — connect from WanVideoVAELoader"}),
+                "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "CLIP vision embeddings of the conditioning frame(s) — connect from WanVideoClipVisionEncode. Required for image-to-video conditioning"}),
+                "start_image": ("IMAGE", {"tooltip": "Start frame (IMAGE, HxWx3 in [0,1]) — encoded by the VAE and pinned at frame 0 of the output sequence. Required for I2V; resized to width x height internally"}),
+                "end_image": ("IMAGE", {"tooltip": "Optional end frame (IMAGE, HxWx3 in [0,1]) — encoded by the VAE and pinned at the last frame for first-last-frame interpolation (FLF2V / Fun); resized to width x height internally"}),
+                "control_embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Pre-built control-signal embeds (e.g. depth/canny/pose latents) for the Fun-Control model — connect from WanVideoControlEmbeds"}),
                 "fun_or_fl2v_model": ("BOOLEAN", {"default": True, "tooltip": "Enable when using official FLF2V or Fun model"}),
-                "temporal_mask": ("MASK", {"tooltip": "mask"}),
+                "temporal_mask": ("MASK", {"tooltip": "Per-frame mask (MASK, T frames at output resolution) marking which timesteps the start/end image conditioning applies to; resized internally to latent resolution. Auto-built from start_image/end_image when omitted"}),
                 "extra_latents": ("LATENT", {"tooltip": "Extra latents to add to the input front, used for Skyreels A2 reference images"}),
                 "tiled_vae": ("BOOLEAN", {"default": False, "tooltip": "Use tiled VAE encoding for reduced memory use"}),
-                "add_cond_latents": ("ADD_COND_LATENTS", {"advanced": True, "tooltip": "Additional cond latents WIP"}),
+                "add_cond_latents": ("ADD_COND_LATENTS", {"advanced": True, "tooltip": "Additional conditioning latents bundle (e.g. RealisDance SMPL+Hamer pose) — connect from WanVideoRealisDanceLatents. WIP"}),
                 "augment_empty_frames": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "EXPERIMENTAL: Augment empty frames with the difference to the start image to force more motion"}),
                 "empty_frame_pad_image": ("IMAGE", {"tooltip": "Use this image to pad empty frames instead of gray, used with SVI-shot and SVI 2.0 LoRAs"}),
             }
@@ -1179,11 +1179,11 @@ class WanVideoAnimateEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "vae": ("WANVAE",),
-            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Width of the image to encode"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Height of the image to encode"}),
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
-            "force_offload": ("BOOLEAN", {"default": True}),
+            "vae": ("WANVAE", {"tooltip": "Wan VAE used to encode the reference/pose/background images into latents — connect from WanVideoVAELoader"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent width in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent height in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of output video frames; must be 4n+1 (auto-rounded). 81 frames = ~5s at 16fps Wan training rate"}),
+            "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Move the VAE to the offload device after encoding to free VRAM"}),
             "frame_window_size": ("INT", {"default": 77, "min": 1, "max": 10000, "step": 1, "tooltip": "Number of frames to use for temporal attention window"}),
             "colormatch": (
             [
@@ -1197,16 +1197,16 @@ class WanVideoAnimateEmbeds:
             ], {
                "default": 'disabled', "tooltip": "Color matching method to use between the windows"
             },),
-            "pose_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional multiplier for the pose"}),
-            "face_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional multiplier for the face"}),
+            "pose_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Multiplier on the pose-conditioning contribution; 0 disables pose driving, 1.0 = full strength"}),
+            "face_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Multiplier on the face-conditioning contribution; 0 disables face identity, 1.0 = full strength"}),
             },
             "optional": {
-                "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "Clip vision encoded image"}),
-                "ref_images": ("IMAGE", {"tooltip": "Image to encode"}),
-                "pose_images": ("IMAGE", {"tooltip": "end frame"}),
-                "face_images": ("IMAGE", {"tooltip": "end frame"}),
-                "bg_images": ("IMAGE", {"tooltip": "background images"}),
-                "mask": ("MASK", {"tooltip": "mask"}),
+                "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "CLIP vision embeddings of the reference frame(s) — connect from WanVideoClipVisionEncode. Optional but recommended for identity preservation"}),
+                "ref_images": ("IMAGE", {"tooltip": "Reference identity image(s) (IMAGE, BxHxWx3 in [0,1]) — the appearance target the animated character should match. Resized to width x height and VAE-encoded internally"}),
+                "pose_images": ("IMAGE", {"tooltip": "Driving pose video (IMAGE, TxHxWx3 in [0,1]) — one rendered pose frame per output frame (DWPose / OpenPose / SMPL skeleton image). Resized to width x height and VAE-encoded internally"}),
+                "face_images": ("IMAGE", {"tooltip": "Driving face video (IMAGE, TxHxWx3 in [0,1]) — one cropped face frame per output frame for face-identity conditioning. Center-cropped/resized to 512x512 internally"}),
+                "bg_images": ("IMAGE", {"tooltip": "Driving background video (IMAGE, TxHxWx3 in [0,1]) — per-frame background plate composited behind the animated subject. Resized to width x height internally. If omitted, background is zero/black"}),
+                "mask": ("MASK", {"tooltip": "Per-frame subject/foreground mask (MASK, T frames at output resolution) separating the animated subject from the background plate; resized internally to latent resolution. Optional — full-image foreground if omitted"}),
                 "start_ref_image": ("IMAGE", {"tooltip": "start ref image"}),
                 "tiled_vae": ("BOOLEAN", {"default": False, "tooltip": "Use tiled VAE encoding for reduced memory use"}),
             }
@@ -1373,13 +1373,13 @@ class WanVideoUniLumosEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Width of the image to encode"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Height of the image to encode"}),
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent width in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent height in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of output video frames; must be 4n+1 (auto-rounded). 81 frames = ~5s at 16fps Wan training rate"}),
             },
             "optional": {
-                "foreground_latents": ("LATENT", {"tooltip": "Video foreground latents"}),
-                "background_latents": ("LATENT", {"tooltip": "Video background latents"}),
+                "foreground_latents": ("LATENT", {"tooltip": "VAE-encoded foreground video latents driving the subject for UniLumos relighting — encode the foreground plate with WanVideoEncode. Zero/black if omitted"}),
+                "background_latents": ("LATENT", {"tooltip": "VAE-encoded background video latents driving the relighting environment for UniLumos — encode the background plate with WanVideoEncode. Zero/black if omitted"}),
             }
         }
 
@@ -1412,13 +1412,13 @@ class WanVideoEmptyEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Width of the image to encode"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Height of the image to encode"}),
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent width in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent height in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of output video frames; must be 4n+1 (auto-rounded). 81 frames = ~5s at 16fps Wan training rate"}),
             },
             "optional": {
-                "control_embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "control signal for the Fun -model"}),
-                "extra_latents": ("LATENT", {"tooltip": "First latent to use for the Pusa -model"}),
+                "control_embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Pre-built control-signal embeds (e.g. depth/canny/pose latents) for the Fun-Control model — connect from WanVideoControlEmbeds"}),
+                "extra_latents": ("LATENT", {"tooltip": "First (anchor) latent prepended to the sequence for Pusa-style I2V / front-anchored T2V — typically a single VAE-encoded reference frame from WanVideoEncode"}),
             }
         }
 
@@ -1449,8 +1449,8 @@ class WanVideoAddExtraLatent:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "extra_latents": ("LATENT",),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing image-embeds bundle to append the extra latent to — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / etc."}),
+                    "extra_latents": ("LATENT", {"tooltip": "VAE-encoded latent to insert at latent_index along the temporal axis — typically a reference frame from WanVideoEncode. Stackable: chain multiple WanVideoAddExtraLatent nodes to add several"}),
                     "latent_index": ("INT", {"default": 0, "min": -1000, "max": 1000, "step": 1, "tooltip": "Index to insert the extra latents at in latent space"}),
                 }
         }
@@ -1484,8 +1484,8 @@ class WanVideoAddLucyEditLatents:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "embeds": ("WANVIDIMAGE_EMBEDS",),
-                    "extra_latents": ("LATENT",),
+                    "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing image-embeds bundle to attach Lucy-Edit extra channel latents to — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / etc."}),
+                    "extra_latents": ("LATENT", {"tooltip": "VAE-encoded reference video latent supplying the Lucy-Edit extra-channel conditioning (concatenated to the model's input along the channel axis) — encode the reference video with WanVideoEncodeLatentBatch / WanVideoEncode"}),
                 }
         }
 
@@ -1503,11 +1503,11 @@ class WanVideoMiniMaxRemoverEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Width of the image to encode"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Height of the image to encode"}),
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent width in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent height in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of output video frames; must be 4n+1 (auto-rounded). 81 frames = ~5s at 16fps Wan training rate"}),
             "latents": ("LATENT", {"tooltip": "Encoded latents to use as control signals"}),
-            "mask_latents": ("LATENT", {"tooltip": "Encoded latents to use as mask"}),
+            "mask_latents": ("LATENT", {"tooltip": "VAE-encoded mask video latent marking the region to remove (white=remove, black=keep) — VAE-encode a per-frame binary mask video with WanVideoEncode / WanVideoEncodeLatentBatch"}),
             },
         }
 
@@ -1535,18 +1535,18 @@ class WanVideoPhantomEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
-            "phantom_latent_1": ("LATENT", {"tooltip": "reference latents for the phantom model"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of output video frames; must be 4n+1 (auto-rounded). 81 frames = ~5s at 16fps Wan training rate"}),
+            "phantom_latent_1": ("LATENT", {"tooltip": "First VAE-encoded reference image latent supplying identity for the Phantom model — encode the reference frame with WanVideoEncode. Required; latents 2-4 are optional additional references concatenated along the temporal axis"}),
             
             "phantom_cfg_scale": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "CFG scale for the extra phantom cond pass"}),
-            "phantom_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the phantom model"}),
-            "phantom_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the phantom model"}),
+            "phantom_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start of the step range (0-1 = fraction of total steps) where the Phantom reference-identity injection is active"}),
+            "phantom_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End of the step range (0-1 = fraction of total steps) where the Phantom reference-identity injection is active"}),
             },
             "optional": {
-                "phantom_latent_2": ("LATENT", {"tooltip": "reference latents for the phantom model"}),
-                "phantom_latent_3": ("LATENT", {"tooltip": "reference latents for the phantom model"}),
-                "phantom_latent_4": ("LATENT", {"tooltip": "reference latents for the phantom model"}),
-                "vace_embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "VACE embeds"}),
+                "phantom_latent_2": ("LATENT", {"tooltip": "Optional second VAE-encoded reference image latent for Phantom — concatenated to latent 1 along the temporal axis to mix additional identity samples"}),
+                "phantom_latent_3": ("LATENT", {"tooltip": "Optional third VAE-encoded reference image latent for Phantom — concatenated along the temporal axis"}),
+                "phantom_latent_4": ("LATENT", {"tooltip": "Optional fourth VAE-encoded reference image latent for Phantom — concatenated along the temporal axis"}),
+                "vace_embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Optional VACE context bundle to combine with Phantom identity — connect from WanVideoVACEEncode to run Phantom + VACE control jointly"}),
             }
         }
 
@@ -1597,12 +1597,12 @@ class WanVideoControlEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the control signal"}),
-            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the control signal"}),
+            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start of the step range (0-1 = fraction of total steps) where the control signal is applied"}),
+            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End of the step range (0-1 = fraction of total steps) where the control signal is applied"}),
             "latents": ("LATENT", {"tooltip": "Encoded latents to use as control signals"}),
             },
             "optional": {
-                "fun_ref_image": ("LATENT", {"tooltip": "Reference latent for the Fun 1.1 -model"}),
+                "fun_ref_image": ("LATENT", {"tooltip": "Optional single-frame VAE-encoded reference latent for Fun-Control 1.1's identity branch — only frame 0 is used. Encode the reference frame with WanVideoEncode"}),
             }
         }
 
@@ -1636,13 +1636,13 @@ class WanVideoAddControlEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "embeds": ("WANVIDIMAGE_EMBEDS",),
-            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the control signal"}),
-            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the control signal"}),
+            "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing image-embeds bundle to attach the Fun-Control signal to — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / etc."}),
+            "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start of the step range (0-1 = fraction of total steps) where the control signal is applied"}),
+            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End of the step range (0-1 = fraction of total steps) where the control signal is applied"}),
             },
             "optional": {
                 "latents": ("LATENT", {"tooltip": "Encoded latents to use as control signals"}),
-                "fun_ref_image": ("LATENT", {"tooltip": "Reference latent for the Fun 1.1 -model"}),
+                "fun_ref_image": ("LATENT", {"tooltip": "Optional single-frame VAE-encoded reference latent for Fun-Control 1.1's identity branch — only frame 0 is used. Encode the reference frame with WanVideoEncode"}),
             }
         }
 
@@ -1668,9 +1668,9 @@ class WanVideoAddPusaNoise:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "embeds": ("WANVIDIMAGE_EMBEDS",),
+            "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing image-embeds bundle to attach the Pusa noise multipliers to — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / etc."}),
             "noise_multipliers": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Noise multipliers for Pusa, can be a list of floats"}),
-            "noisy_steps": ("INT", {"default": -1, "min": -1, "max": 1000, "tooltip": "Number steps to apply the extra noise"}),
+            "noisy_steps": ("INT", {"default": -1, "min": -1, "max": 1000, "tooltip": "Number of initial steps to apply the extra Pusa noise multipliers; -1 means apply for the whole denoise"}),
             },
         }
 
@@ -1692,8 +1692,8 @@ class WanVideoSLG:
     def INPUT_TYPES(s):
         return {"required": {
             "blocks": ("STRING", {"default": "10", "tooltip": "Blocks to skip uncond on, separated by comma, index starts from 0"}),
-            "start_percent": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the control signal"}),
-            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the control signal"}),
+            "start_percent": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start of the step range (0-1 = fraction of total steps) where the control signal is applied"}),
+            "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End of the step range (0-1 = fraction of total steps) where the control signal is applied"}),
             },
         }
 
@@ -1718,19 +1718,19 @@ class WanVideoVACEEncode:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "vae": ("WANVAE",),
-            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Width of the image to encode"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Height of the image to encode"}),
-            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
-            "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001}),
-            "vace_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the steps to apply VACE"}),
-            "vace_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the steps to apply VACE"}),
+            "vae": ("WANVAE", {"tooltip": "Wan VAE used to encode VACE input/reference frames into latents — connect from WanVideoVAELoader"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent width in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 8096, "step": 8, "tooltip": "Target latent height in pixels; should match the resolution of any conditioning images and be divisible by 16"}),
+            "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of output video frames; must be 4n+1 (auto-rounded). 81 frames = ~5s at 16fps Wan training rate"}),
+            "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "VACE conditioning strength multiplier; 0 disables, 1.0 = full effect"}),
+            "vace_start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start of the step range (0-1 = fraction of total steps) where VACE conditioning is active"}),
+            "vace_end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End of the step range (0-1 = fraction of total steps) where VACE conditioning is active"}),
             },
             "optional": {
-                "input_frames": ("IMAGE",),
-                "ref_images": ("IMAGE",),
-                "input_masks": ("MASK",),
-                "prev_vace_embeds": ("WANVIDIMAGE_EMBEDS",),
+                "input_frames": ("IMAGE", {"tooltip": "Driving control video (IMAGE, TxHxWx3 in [0,1]) — per-frame control signal (depth/canny/pose/etc.) for VACE; resized to width x height and VAE-encoded internally. Zero/black if omitted"}),
+                "ref_images": ("IMAGE", {"tooltip": "Reference identity image(s) (IMAGE, BxHxWx3 in [0,1]) — appearance targets concatenated to the input frames as VACE reference tokens; aspect-padded to width:height and VAE-encoded internally"}),
+                "input_masks": ("MASK", {"tooltip": "Per-frame inpaint/region masks (MASK, T frames at output resolution) marking which pixels should follow input_frames vs. be generated freely; resized internally to latent resolution. Full-image mask if omitted"}),
+                "prev_vace_embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Optional previously-built VACE embeds bundle to chain additional control passes onto — connect from another WanVideoVACEEncode for multi-control composition"}),
                 "tiled_vae": ("BOOLEAN", {"default": False, "tooltip": "Use tiled VAE encoding for reduced memory use"}),
             },
         }
@@ -1895,12 +1895,12 @@ class WanVideoContextOptions:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "context_schedule": (["uniform_standard", "uniform_looped", "static_standard"],),
+            "context_schedule": (["uniform_standard", "uniform_looped", "static_standard"], {"tooltip": "How windows are placed across the timeline: uniform_standard = evenly spaced, uniform_looped = wrap-around for looping video, static_standard = fixed non-overlapping windows"}),
             "context_frames": ("INT", {"default": 81, "min": 2, "max": 1000, "step": 1, "tooltip": "Number of pixel frames in the context, NOTE: the latent space has 4 frames in 1"} ),
             "context_stride": ("INT", {"default": 4, "min": 4, "max": 100, "step": 1, "tooltip": "Context stride as pixel frames, NOTE: the latent space has 4 frames in 1"} ),
             "context_overlap": ("INT", {"default": 16, "min": 4, "max": 100, "step": 1, "tooltip": "Context overlap as pixel frames, NOTE: the latent space has 4 frames in 1"} ),
-            "freenoise": ("BOOLEAN", {"default": True, "tooltip": "Shuffle the noise"}),
-            "verbose": ("BOOLEAN", {"default": False, "tooltip": "Print debug output"}),
+            "freenoise": ("BOOLEAN", {"default": True, "tooltip": "Apply FreeNoise: shuffle/repeat noise across overlapping context windows to improve temporal coherence in long generations"}),
+            "verbose": ("BOOLEAN", {"default": False, "tooltip": "Print per-window context scheduling info to the console for debugging"}),
             },
             "optional": {
                 "fuse_method": (["linear", "pyramid"], {"default": "linear", "tooltip": "Window weight function: linear=ramps at edges only, pyramid=triangular weights peaking in middle"}),
@@ -1932,9 +1932,9 @@ class WanVideoLoopArgs:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                "shift_skip": ("INT", {"default": 6, "min": 0, "tooltip": "Skip step of latent shift"}),
-                "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the looping effect"}),
-                "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the looping effect"}),
+                "shift_skip": ("INT", {"default": 6, "min": 0, "tooltip": "Number of latents to shift per loop application (Mobius latent-shift stride); 0 disables shifting"}),
+                "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start of the step range (0-1 = fraction of total steps) where the latent-shift loop is applied"}),
+                "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End of the step range (0-1 = fraction of total steps) where the latent-shift loop is applied"}),
             },
         }
 
@@ -1953,18 +1953,18 @@ class WanVideoExperimentalArgs:
         return {"required": {
                 "video_attention_split_steps": ("STRING", {"default": "", "tooltip": "Steps to split self attention when using multiple prompts"}),
                 "cfg_zero_star": ("BOOLEAN", {"default": False, "tooltip": "https://github.com/WeichenFan/CFG-Zero-star"}),
-                "use_zero_init": ("BOOLEAN", {"default": False}),
-                "zero_star_steps": ("INT", {"default": 0, "min": 0, "tooltip": "Steps to split self attention when using multiple prompts"}),
-                "use_fresca": ("BOOLEAN", {"default": False, "tooltip": "https://github.com/WikiChao/FreSca"}),
-                "fresca_scale_low": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
-                "fresca_scale_high": ("FLOAT", {"default": 1.25, "min": 0.0, "max": 10.0, "step": 0.01}),
-                "fresca_freq_cutoff": ("INT", {"default": 20, "min": 0, "max": 10000, "step": 1}),
+                "use_zero_init": ("BOOLEAN", {"default": False, "tooltip": "Zero-init the first zero_star_steps for CFG-Zero-Star; reduces guidance artifacts early in sampling. Pairs with cfg_zero_star and zero_star_steps"}),
+                "zero_star_steps": ("INT", {"default": 0, "min": 0, "tooltip": "Number of initial steps to zero-out when use_zero_init is on; consumes part of the step budget so increase total steps to compensate"}),
+                "use_fresca": ("BOOLEAN", {"default": False, "tooltip": "Enable FreSca frequency-separated guidance (https://github.com/WikiChao/FreSca); applies different CFG scales to low/high-frequency components"}),
+                "fresca_scale_low": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "FreSca guidance scale for low-frequency components (structure/composition)"}),
+                "fresca_scale_high": ("FLOAT", {"default": 1.25, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "FreSca guidance scale for high-frequency components (detail/texture); higher than low boosts sharpness"}),
+                "fresca_freq_cutoff": ("INT", {"default": 20, "min": 0, "max": 10000, "step": 1, "tooltip": "FreSca cutoff frequency separating low- from high-frequency bands during guidance"}),
                 "use_tcfg": ("BOOLEAN", {"default": False, "tooltip": "https://arxiv.org/abs/2503.18137 TCFG: Tangential Damping Classifier-free Guidance. CFG artifacts reduction."}),
                 "raag_alpha": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Alpha value for RAAG, 1.0 is default, 0.0 is disabled."}),
                 "bidirectional_sampling": ("BOOLEAN", {"default": False, "tooltip": "Enable bidirectional sampling, based on https://github.com/ff2416/WanFM"}),
                 "temporal_score_rescaling": ("BOOLEAN", {"default": False, "tooltip": "Enable temporal score rescaling: https://github.com/temporalscorerescaling/TSR/"}),
-                "tsr_k": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "The sampling temperature"}),
-                "tsr_sigma": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "How early TSR steer the sampling process"}),
+                "tsr_k": ("FLOAT", {"default": 0.95, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Temporal Score Rescaling k coefficient; controls how aggressively predictions are rescaled toward the temporal prior"}),
+                "tsr_sigma": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "TSR sigma cutoff (0-1 of total steps); how early in sampling TSR begins steering the trajectory"}),
             },
         }
 
@@ -1982,11 +1982,11 @@ class WanVideoFreeInitArgs:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                "freeinit_num_iters": ("INT", {"default": 3, "min": 1, "max": 10, "tooltip": "Number of FreeInit iterations"}),
-                "freeinit_method": (["butterworth", "ideal", "gaussian", "none"], {"default": "ideal", "tooltip": "Frequency filter type"}),
+                "freeinit_num_iters": ("INT", {"default": 3, "min": 1, "max": 10, "tooltip": "Number of FreeInit refinement passes; each iteration re-noises low-frequency components and re-denoises. More = better consistency, linearly more time"}),
+                "freeinit_method": (["butterworth", "ideal", "gaussian", "none"], {"default": "ideal", "tooltip": "Low/high frequency filter shape used to split noise components between iterations"}),
                 "freeinit_n": ("INT", {"default": 4, "min": 1, "max": 10, "tooltip": "Butterworth filter order (only for butterworth)"}),
-                "freeinit_d_s": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Spatial filter cutoff"}),
-                "freeinit_d_t": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "Temporal filter cutoff"}),
+                "freeinit_d_s": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "FreeInit spatial filter cutoff (normalized); higher = more spatial detail preserved across iterations"}),
+                "freeinit_d_t": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "FreeInit temporal filter cutoff (normalized); higher = more temporal detail preserved across iterations"}),
             },
         }
 
@@ -2005,10 +2005,10 @@ class WanVideoRoPEFunction:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                "rope_function": (rope_functions, {"default": "comfy"}),
-                "ntk_scale_f": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01}),
-                "ntk_scale_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01}),
-                "ntk_scale_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01}),
+                "rope_function": (rope_functions, {"default": "comfy", "tooltip": "RoPE implementation: comfy = ComfyUI's torch.compile-friendly real-number version (recommended); comfy_chunked = lower-VRAM chunked variant; default = original complex-number reference"}),
+                "ntk_scale_f": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "NTK-aware RoPE scale on the temporal (frame) axis; >1 extrapolates to longer sequences than training, 1.0 = no scaling"}),
+                "ntk_scale_h": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "NTK-aware RoPE scale on the height axis; >1 extrapolates to taller resolutions than training, 1.0 = no scaling"}),
+                "ntk_scale_w": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "NTK-aware RoPE scale on the width axis; >1 extrapolates to wider resolutions than training, 1.0 = no scaling"}),
             },
         }
 
@@ -2034,11 +2034,11 @@ class WanVideoAddTTMLatents:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "embeds": ("WANVIDIMAGE_EMBEDS",),
-            "reference_latents": ("LATENT", {"tooltip": "Latents used as reference for TTM"}),
-            "mask": ("MASK", {"tooltip": "Mask used for TTM"}),
-            "start_step": ("INT", {"default": 0, "min": -1, "max": 1000, "step": 1, "tooltip": "Start step for whole denoising process"}),
-            "end_step": ("INT", {"default": 1, "min": 1, "max": 1000, "step": 1, "tooltip": "The step to stop applying TTM"}),
+            "embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Existing image-embeds bundle to attach TTM (Time-to-Move) reference latents to — connect from WanVideoImageToVideoEncode / WanVideoEmptyEmbeds / etc."}),
+            "reference_latents": ("LATENT", {"tooltip": "VAE-encoded reference video latents injected during the TTM step range to anchor source motion/identity — encode the reference clip with WanVideoEncode / WanVideoEncodeLatentBatch"}),
+            "mask": ("MASK", {"tooltip": "Per-frame TTM region mask (MASK, full output resolution) — white selects pixels driven by the reference latents, black is generated freely. Subsampled by 4 along time and downscaled to latent resolution internally"}),
+            "start_step": ("INT", {"default": 0, "min": -1, "max": 1000, "step": 1, "tooltip": "First sampler step (absolute index) at which TTM reference latents start being injected"}),
+            "end_step": ("INT", {"default": 1, "min": 1, "max": 1000, "step": 1, "tooltip": "Sampler step (absolute index) at which TTM injection stops; must be >= start_step"}),
             },
         }
 
@@ -2082,14 +2082,10 @@ class WanVideoDecode:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "vae": ("WANVAE",),
-                    "samples": ("LATENT",),
+                    "vae": ("WANVAE", {"tooltip": "Wan VAE used to decode latents back to pixel video — connect from WanVideoVAELoader"}),
+                    "samples": ("LATENT", {"tooltip": "Sampled latents to decode into a pixel video — typically the samples output of WanVideoSampler / WanVideoSamplerv2"}),
                     "enable_vae_tiling": ("BOOLEAN", {"default": False, "tooltip": (
-                        "Drastically reduces memory use but will introduce seams at tile stride boundaries. "
-                        "The location and number of seams is dictated by the tile stride size. "
-                        "The visibility of seams can be controlled by increasing the tile size. "
-                        "Seams become less obvious at 1.5x stride and are barely noticeable at 2x stride size. "
-                        "Which is to say if you use a stride width of 160, the seams are barely noticeable with a tile width of 320."
+                        "Drastically reduces memory use but will introduce seams at tile stride boundaries. The location and number of seams is dictated by the tile stride size. The visibility of seams can be controlled by increasing the tile size. Seams become less obvious at 1.5x stride and are barely noticeable at 2x stride size. Which is to say if you use a stride width of 160, the seams are barely noticeable with a tile width of 320."
                     )}),
                     "tile_x": ("INT", {"default": 272, "min": 40, "max": 2048, "step": 8, "tooltip": "Tile width in pixels. Smaller values use less VRAM but will make seams more obvious."}),
                     "tile_y": ("INT", {"default": 272, "min": 40, "max": 2048, "step": 8, "tooltip": "Tile height in pixels. Smaller values use less VRAM but will make seams more obvious."}),
@@ -2097,7 +2093,7 @@ class WanVideoDecode:
                     "tile_stride_y": ("INT", {"default": 128, "min": 32, "max": 2040, "step": 8, "tooltip": "Tile stride height in pixels. Smaller values use less VRAM but will introduce more seams."}),
                     },
                     "optional": {
-                        "normalization": (["default", "minmax", "none"], {"advanced": True}),
+                        "normalization": (["default", "minmax", "none"], {"advanced": True, "tooltip": "Post-decode pixel normalization: default clamps to [-1,1] then rescales to [0,1], minmax rescales by min/max, none leaves the raw output"}),
                     }
                 }
 
@@ -2181,8 +2177,8 @@ class WanVideoEncodeLatentBatch:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "vae": ("WANVAE",),
-                    "images": ("IMAGE",),
+                    "vae": ("WANVAE", {"tooltip": "Wan VAE used to encode each image individually into a single-frame latent — connect from WanVideoVAELoader"}),
+                    "images": ("IMAGE", {"tooltip": "Batch of images (IMAGE, BxHxWx3 in [0,1]) encoded one-at-a-time; result is a latent batch where each entry is a 1-frame video. Useful for multi-window I2V init or supplying several reference latents"}),
                     "enable_vae_tiling": ("BOOLEAN", {"default": False, "tooltip": "Drastically reduces memory use but may introduce seams"}),
                     "tile_x": ("INT", {"default": 272, "min": 64, "max": 2048, "step": 1, "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"}),
                     "tile_y": ("INT", {"default": 272, "min": 64, "max": 2048, "step": 1, "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"}),
@@ -2235,8 +2231,8 @@ class WanVideoEncode:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                    "vae": ("WANVAE",),
-                    "image": ("IMAGE",),
+                    "vae": ("WANVAE", {"tooltip": "Wan VAE used to encode the image/video into latent space — connect from WanVideoVAELoader"}),
+                    "image": ("IMAGE", {"tooltip": "Image or stacked frames (IMAGE, BxHxWx3 in [0,1]) encoded as a single video into latents along the temporal axis; auto-resized to a 16-divisible width/height if needed"}),
                     "enable_vae_tiling": ("BOOLEAN", {"default": False, "tooltip": "Drastically reduces memory use but may introduce seams"}),
                     "tile_x": ("INT", {"default": 272, "min": 64, "max": 2048, "step": 1, "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"}),
                     "tile_y": ("INT", {"default": 272, "min": 64, "max": 2048, "step": 1, "tooltip": "Tile size in pixels, smaller values use less VRAM, may introduce more seams"}),
@@ -2246,7 +2242,7 @@ class WanVideoEncode:
                     "optional": {
                         "noise_aug_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Strength of noise augmentation, helpful for leapfusion I2V where some noise can add motion and give sharper results"}),
                         "latent_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional latent multiplier, helpful for leapfusion I2V where lower values allow for more motion"}),
-                        "mask": ("MASK", ),
+                        "mask": ("MASK",  {"tooltip": "Optional inpaint/region mask (MASK) carried alongside the encoded latents as noise_mask — used by downstream samplers to constrain denoising to the masked region"}),
                     }
                 }
 

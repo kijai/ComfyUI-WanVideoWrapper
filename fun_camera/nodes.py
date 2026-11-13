@@ -119,10 +119,10 @@ class WanVideoFunCameraEmbeds:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-            "poses": ("CAMERACTRL_POSES", ),
-            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Width of the image to encode"}),
-            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Height of the image to encode"}),
-            "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Strength of the camera motion"}),
+            "poses": ("CAMERACTRL_POSES",  {"tooltip": "Per-frame camera intrinsics + 3x4 extrinsics (CameraCtrl format) — connect from an AnimateDiff-Evolved CameraCtrl pose source"}),
+            "width": ("INT", {"default": 832, "min": 64, "max": 2048, "step": 8, "tooltip": "Output width in pixels for the rendered Plücker camera embedding; should match the latent canvas width"}),
+            "height": ("INT", {"default": 480, "min": 64, "max": 29048, "step": 8, "tooltip": "Output height in pixels for the rendered Plücker camera embedding; should match the latent canvas height"}),
+            "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Multiplier applied to the camera-control latents; 1.0 = full guidance, 0 disables camera motion"}),
             "start_percent": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Start percent of the steps to apply camera motion"}),
             "end_percent": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "End percent of the steps to apply camera motion"}),
             },

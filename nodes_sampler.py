@@ -37,35 +37,35 @@ class WanVideoSampler:
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model": ("WANVIDEOMODEL",),
-                "image_embeds": ("WANVIDIMAGE_EMBEDS", ),
-                "steps": ("INT", {"default": 30, "min": 1}),
-                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01}),
-                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "model": ("WANVIDEOMODEL", {"tooltip": "Wan diffusion transformer (with any LoRAs / blockswap / radial-attention patches applied) — connect from WanVideoModelLoader or the output of WanVideoSetLoRAs / WanVideoSetBlockSwap / WanVideoSetRadialAttention"}),
+                "image_embeds": ("WANVIDIMAGE_EMBEDS",  {"tooltip": "Image conditioning bundle (start/end latents, control signal, VAE, target HxW, num_frames) — connect from WanVideoImageToVideoEncode, WanVideoEmptyEmbeds, WanVideoPhantomEmbeds, WanVideoVACEEncode, or another *Embeds producer"}),
+                "steps": ("INT", {"default": 30, "min": 1, "tooltip": "Total denoising iterations across the sigma schedule; more steps = higher quality, slower. Distilled / Lightning checkpoints expect 4–8"}),
+                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01, "tooltip": "Classifier-free guidance scale; higher follows the prompt more strictly. Set to 1.0 to skip the uncond pass entirely (faster, required for distilled / Lightning models)"}),
+                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01, "tooltip": "Flow-matching sigma shift; higher pushes more sampling effort toward early (high-noise) steps. Wan 2.2 typically uses 5.0–8.0"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "RNG seed for the initial noise; same seed + same inputs = same output"}),
                 "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Moves the model to the offload device after sampling"}),
-                "scheduler": (scheduler_list, {"default": "unipc",}),
+                "scheduler": (scheduler_list, {"default": "unipc", "tooltip": "Sigma schedule used for the denoising trajectory — picks both the noise levels per step and the integration algorithm (unipc / dpm++ / flowmatch_causvid / etc.)",}),
                 "riflex_freq_index": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1, "tooltip": "Frequency index for RIFLEX, disabled when 0, default 6. Allows for new frames to be generated after without looping"}),
             },
             "optional": {
-                "text_embeds": ("WANVIDEOTEXTEMBEDS", ),
+                "text_embeds": ("WANVIDEOTEXTEMBEDS",  {"tooltip": "Encoded positive + negative prompt embeddings — connect from WanVideoTextEncode, WanVideoTextEncodeCached, or WanVideoTextEmbedBridge"}),
                 "samples": ("LATENT", {"tooltip": "init Latents to use for video2video process"} ),
-                "denoise_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
-                "feta_args": ("FETAARGS", ),
-                "context_options": ("WANVIDCONTEXT", ),
-                "cache_args": ("CACHEARGS", ),
-                "flowedit_args": ("FLOWEDITARGS", {"tooltip": "FlowEdit support has been deprecated"}),
+                "denoise_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01, "tooltip": "Strength of the denoise applied to init samples; 0.0 = passthrough (no change), 1.0 = full re-sample. Used for video2video"}),
+                "feta_args": ("FETAARGS",  {"tooltip": "Enhance-A-Video (FETA) feature-enhancement weight and step range — connect from WanVideoEnhanceAVideo"}),
+                "context_options": ("WANVIDCONTEXT",  {"tooltip": "Sliding-window / context-window settings for long-video sampling (window size, stride, overlap, schedule) — connect from WanVideoContextOptions"}),
+                "cache_args": ("CACHEARGS",  {"tooltip": "Cache acceleration settings (TeaCache / MagCache / EasyCache thresholds and step ranges) — connect from WanVideoTeaCache, WanVideoMagCache, or WanVideoEasyCache"}),
+                "flowedit_args": ("FLOWEDITARGS", {"tooltip": "DEPRECATED — FlowEdit support has been removed; wiring this input will raise an exception at runtime"}),
                 "batched_cfg": ("BOOLEAN", {"default": False, "tooltip": "Batch cond and uncond for faster sampling, possibly faster on some hardware, uses more memory"}),
-                "slg_args": ("SLGARGS", ),
+                "slg_args": ("SLGARGS",  {"tooltip": "Skip-Layer Guidance settings (which blocks to skip on the uncond pass and over which step range) — connect from WanVideoSLG"}),
                 "rope_function": (rope_functions, {"default": "comfy", "tooltip": "Comfy's RoPE implementation doesn't use complex numbers and can thus be compiled, that should be a lot faster when using torch.compile. Chunked version has reduced peak VRAM usage when not using torch.compile"}),
-                "loop_args": ("LOOPARGS", ),
-                "experimental_args": ("EXPERIMENTALARGS", ),
-                "sigmas": ("SIGMAS", ),
-                "unianimate_poses": ("UNIANIMATE_POSE", ),
-                "fantasytalking_embeds": ("FANTASYTALKING_EMBEDS", ),
-                "uni3c_embeds": ("UNI3C_EMBEDS", ),
-                "multitalk_embeds": ("MULTITALK_EMBEDS", ),
-                "freeinit_args": ("FREEINITARGS", ),
+                "loop_args": ("LOOPARGS",  {"tooltip": "Looping / seamless-tile sampling settings — connect from WanVideoLoopArgs"}),
+                "experimental_args": ("EXPERIMENTALARGS",  {"tooltip": "Experimental sampling toggles (CFG-Zero*, zero-init steps, video-noise-aug, etc.) — connect from WanVideoExperimentalArgs"}),
+                "sigmas": ("SIGMAS",  {"tooltip": "External sigma schedule overriding the built-in scheduler; wire from a custom sigma source to use a hand-crafted noise curve"}),
+                "unianimate_poses": ("UNIANIMATE_POSE",  {"tooltip": "UniAnimate DWPose conditioning for pose-guided video — connect from WanVideoUniAnimatePoseInput"}),
+                "fantasytalking_embeds": ("FANTASYTALKING_EMBEDS",  {"tooltip": "FantasyTalking audio conditioning embeddings for talking-head generation — connect from FantasyTalkingWav2VecEmbeds"}),
+                "uni3c_embeds": ("UNI3C_EMBEDS",  {"tooltip": "Uni3C controlnet conditioning embeddings (camera / 3D control) — connect from WanVideoUni3C_embeds"}),
+                "multitalk_embeds": ("MULTITALK_EMBEDS",  {"tooltip": "MultiTalk per-speaker audio embeddings for multi-character talking-head video — connect from MultiTalkWav2VecEmbeds or MultiTalkSilentEmbeds"}),
+                "freeinit_args": ("FREEINITARGS",  {"tooltip": "FreeInit iterative-noise-refresh settings to improve temporal consistency — connect from WanVideoFreeInitArgs"}),
                 "start_step": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1, "tooltip": "Start step for the sampling, 0 means full sampling, otherwise samples only from this step"}),
                 "end_step": ("INT", {"default": -1, "min": -1, "max": 10000, "step": 1, "tooltip": "End step for the sampling, -1 means full sampling, otherwise samples only until this step"}),
                 "add_noise_to_samples": ("BOOLEAN", {"default": False, "tooltip": "Add noise to the samples before sampling, needed for video2video sampling when starting from clean video"}),
@@ -2663,7 +2663,7 @@ class WanVideoSamplerFromSettings(WanVideoSampler):
     def INPUT_TYPES(s):
         return {
             "required": {
-                "sampler_inputs": ("SAMPLER_ARGS",),},
+                "sampler_inputs": ("SAMPLER_ARGS", {"tooltip": "Pre-packaged WanVideoSampler argument dict (all required + optional inputs in one socket) — connect from WanVideoSamplerSettings"}),},
         }
 
     def process(self, sampler_inputs):
@@ -2678,17 +2678,17 @@ class WanVideoSamplerExtraArgs():
             },
             "optional": {
                 "riflex_freq_index": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1, "tooltip": "Frequency index for RIFLEX, disabled when 0, default 6. Allows for new frames to be generated after without looping"}),
-                "feta_args": ("FETAARGS", ),
-                "context_options": ("WANVIDCONTEXT", ),
-                "cache_args": ("CACHEARGS", ),
-                "slg_args": ("SLGARGS", ),
+                "feta_args": ("FETAARGS",  {"tooltip": "Enhance-A-Video (FETA) feature-enhancement weight and step range — connect from WanVideoEnhanceAVideo"}),
+                "context_options": ("WANVIDCONTEXT",  {"tooltip": "Sliding-window / context-window settings for long-video sampling (window size, stride, overlap, schedule) — connect from WanVideoContextOptions"}),
+                "cache_args": ("CACHEARGS",  {"tooltip": "Cache acceleration settings (TeaCache / MagCache / EasyCache thresholds and step ranges) — connect from WanVideoTeaCache, WanVideoMagCache, or WanVideoEasyCache"}),
+                "slg_args": ("SLGARGS",  {"tooltip": "Skip-Layer Guidance settings (which blocks to skip on the uncond pass and over which step range) — connect from WanVideoSLG"}),
                 "rope_function": (rope_functions, {"default": "comfy", "tooltip": "Comfy's RoPE implementation doesn't use complex numbers and can thus be compiled, that should be a lot faster when using torch.compile. Chunked version has reduced peak VRAM usage when not using torch.compile"}),
-                "loop_args": ("LOOPARGS", ),
-                "experimental_args": ("EXPERIMENTALARGS", ),
-                "unianimate_poses": ("UNIANIMATE_POSE", ),
-                "fantasytalking_embeds": ("FANTASYTALKING_EMBEDS", ),
-                "uni3c_embeds": ("UNI3C_EMBEDS", ),
-                "multitalk_embeds": ("MULTITALK_EMBEDS", ),
+                "loop_args": ("LOOPARGS",  {"tooltip": "Looping / seamless-tile sampling settings — connect from WanVideoLoopArgs"}),
+                "experimental_args": ("EXPERIMENTALARGS",  {"tooltip": "Experimental sampling toggles (CFG-Zero*, zero-init steps, video-noise-aug, etc.) — connect from WanVideoExperimentalArgs"}),
+                "unianimate_poses": ("UNIANIMATE_POSE",  {"tooltip": "UniAnimate DWPose conditioning for pose-guided video — connect from WanVideoUniAnimatePoseInput"}),
+                "fantasytalking_embeds": ("FANTASYTALKING_EMBEDS",  {"tooltip": "FantasyTalking audio conditioning embeddings for talking-head generation — connect from FantasyTalkingWav2VecEmbeds"}),
+                "uni3c_embeds": ("UNI3C_EMBEDS",  {"tooltip": "Uni3C controlnet conditioning embeddings (camera / 3D control) — connect from WanVideoUni3C_embeds"}),
+                "multitalk_embeds": ("MULTITALK_EMBEDS",  {"tooltip": "MultiTalk per-speaker audio embeddings for multi-character talking-head video — connect from MultiTalkWav2VecEmbeds or MultiTalkSilentEmbeds"}),
             }
         }
     RETURN_TYPES = ("WANVIDSAMPLEREXTRAARGS",)
@@ -2705,18 +2705,18 @@ class WanVideoSamplerv2(WanVideoSampler):
     def INPUT_TYPES(s):
         return {
             "required": {
-                "model": ("WANVIDEOMODEL",),
-                "image_embeds": ("WANVIDIMAGE_EMBEDS", ),
-                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01}),
-                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+                "model": ("WANVIDEOMODEL", {"tooltip": "Wan diffusion transformer (with any LoRAs / blockswap / radial-attention patches applied) — connect from WanVideoModelLoader or the output of WanVideoSetLoRAs / WanVideoSetBlockSwap / WanVideoSetRadialAttention"}),
+                "image_embeds": ("WANVIDIMAGE_EMBEDS",  {"tooltip": "Image conditioning bundle (start/end latents, control signal, VAE, target HxW, num_frames) — connect from WanVideoImageToVideoEncode, WanVideoEmptyEmbeds, WanVideoPhantomEmbeds, WanVideoVACEEncode, or another *Embeds producer"}),
+                "cfg": ("FLOAT", {"default": 6.0, "min": 0.0, "max": 30.0, "step": 0.01, "tooltip": "Classifier-free guidance scale; higher follows the prompt more strictly. Set to 1.0 to skip the uncond pass entirely (faster, required for distilled / Lightning models)"}),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff, "tooltip": "RNG seed for the initial noise; same seed + same inputs = same output"}),
                 "force_offload": ("BOOLEAN", {"default": True, "tooltip": "Moves the model to the offload device after sampling"}),
-                "scheduler": ("WANVIDEOSCHEDULER",),
+                "scheduler": ("WANVIDEOSCHEDULER", {"tooltip": "Pre-built sigma schedule + sampler settings — connect from WanVideoSchedulerv2"}),
             },
             "optional": {
-                "text_embeds": ("WANVIDEOTEXTEMBEDS", ),
+                "text_embeds": ("WANVIDEOTEXTEMBEDS",  {"tooltip": "Encoded positive + negative prompt embeddings — connect from WanVideoTextEncode, WanVideoTextEncodeCached, or WanVideoTextEmbedBridge"}),
                 "samples": ("LATENT", {"tooltip": "init Latents to use for video2video process"} ),
                 "add_noise_to_samples": ("BOOLEAN", {"default": False, "tooltip": "Add noise to the samples before sampling, needed for video2video sampling when starting from clean video"}),
-                "extra_args": ("WANVIDSAMPLEREXTRAARGS", ),
+                "extra_args": ("WANVIDSAMPLEREXTRAARGS",  {"tooltip": "Bundle of optional sampler inputs (cache_args, slg_args, riflex_freq_index, rope_function, all *_embeds, etc.) — connect from WanVideoSamplerExtraArgs"}),
             }
         }
 
@@ -2738,14 +2738,14 @@ class WanVideoScheduler:
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                "scheduler": (scheduler_list, {"default": "unipc"}),
-                "steps": ("INT", {"default": 30, "min": 1, "tooltip": "Number of steps for the scheduler"}),
-                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
-                "start_step": ("INT", {"default": 0, "min": 0, "tooltip": "Starting step for the scheduler"}),
-                "end_step": ("INT", {"default": -1, "min": -1, "tooltip": "Ending step for the scheduler"})
+                "scheduler": (scheduler_list, {"default": "unipc", "tooltip": "Sigma schedule used for the denoising trajectory — picks both the noise levels per step and the integration algorithm (unipc / dpm++ / flowmatch_causvid / etc.)"}),
+                "steps": ("INT", {"default": 30, "min": 1, "tooltip": "Total denoising iterations across the schedule; more steps = higher quality, slower. Distilled / Lightning checkpoints expect 4–8"}),
+                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01, "tooltip": "Flow-matching sigma shift; higher pushes more sampling effort toward early (high-noise) steps. Wan 2.2 typically uses 5.0–8.0"}),
+                "start_step": ("INT", {"default": 0, "min": 0, "tooltip": "Start step of the schedule slice; 0 starts from full noise. Use with end_step to drive a HIGH/LOW Wan 2.2 MoE split or multi-pass workflow"}),
+                "end_step": ("INT", {"default": -1, "min": -1, "tooltip": "End step of the schedule slice; -1 means sample to the end. Bound with start_step to carve out a sub-range of the schedule for HIGH/LOW or multi-pass sampling"})
             },
             "optional": {
-                "sigmas": ("SIGMAS", ),
+                "sigmas": ("SIGMAS",  {"tooltip": "External sigma schedule overriding the built-in scheduler; wire from a custom sigma source to use a hand-crafted noise curve"}),
                 "enhance_hf": ("BOOLEAN", {"default": False, "tooltip": "Enhanced high-frequency denoising schedule"}),
             },
             "hidden": {
@@ -2843,14 +2843,14 @@ class WanVideoSchedulerv2(WanVideoScheduler):
     @classmethod
     def INPUT_TYPES(s):
         return {"required": {
-                "scheduler": (scheduler_list, {"default": "unipc"}),
-                "steps": ("INT", {"default": 30, "min": 1, "tooltip": "Number of steps for the scheduler"}),
-                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01}),
-                "start_step": ("INT", {"default": 0, "min": 0, "tooltip": "Starting step for the scheduler"}),
-                "end_step": ("INT", {"default": -1, "min": -1, "tooltip": "Ending step for the scheduler"})
+                "scheduler": (scheduler_list, {"default": "unipc", "tooltip": "Sigma schedule used for the denoising trajectory — picks both the noise levels per step and the integration algorithm (unipc / dpm++ / flowmatch_causvid / etc.)"}),
+                "steps": ("INT", {"default": 30, "min": 1, "tooltip": "Total denoising iterations across the schedule; more steps = higher quality, slower. Distilled / Lightning checkpoints expect 4–8"}),
+                "shift": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 1000.0, "step": 0.01, "tooltip": "Flow-matching sigma shift; higher pushes more sampling effort toward early (high-noise) steps. Wan 2.2 typically uses 5.0–8.0"}),
+                "start_step": ("INT", {"default": 0, "min": 0, "tooltip": "Start step of the schedule slice; 0 starts from full noise. Use with end_step to drive a HIGH/LOW Wan 2.2 MoE split or multi-pass workflow"}),
+                "end_step": ("INT", {"default": -1, "min": -1, "tooltip": "End step of the schedule slice; -1 means sample to the end. Bound with start_step to carve out a sub-range of the schedule for HIGH/LOW or multi-pass sampling"})
             },
             "optional": {
-                "sigmas": ("SIGMAS", ),
+                "sigmas": ("SIGMAS",  {"tooltip": "External sigma schedule overriding the built-in scheduler; wire from a custom sigma source to use a hand-crafted noise curve"}),
                 "enhance_hf": ("BOOLEAN", {"default": False, "tooltip": "Enhanced high-frequency denoising schedule"}),
             },
             "hidden": {
