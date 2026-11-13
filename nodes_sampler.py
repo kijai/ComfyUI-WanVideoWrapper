@@ -1264,7 +1264,7 @@ class WanVideoSampler:
                         latent_end = latent_frames
                         mask_end = latent_end + 1
                         partial_latents = mocha_embeds[:, context_window]  # windowed latents
-                        mask_frame = mocha_embeds[:, latent_end:mask_end]  # single mask frame
+                        mask_frame = mocha_embeds[:, -mocha_num_refs-1:-mocha_num_refs]  # single mask frame
                         ref_frames = mocha_embeds[:, -mocha_num_refs:]     # reference frames
 
                         partial_mocha_embeds = torch.cat([partial_latents, mask_frame, ref_frames], dim=1)
