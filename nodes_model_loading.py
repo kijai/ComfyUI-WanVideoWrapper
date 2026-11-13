@@ -18,6 +18,7 @@ from .utils import set_module_tensor_to_device, get_module_memory_mb_per_device
 import folder_paths
 import comfy.model_management as mm
 from comfy.utils import load_torch_file, ProgressBar
+from comfy.latent_formats import Wan21, Wan22
 import comfy.model_base
 from comfy.sd import load_lora_for_models
 try:
@@ -52,14 +53,6 @@ def update_folder_names_and_paths(key, targets=[]):
         log.warning(f"Unknown file list already present on key {key}: {base}")
 update_folder_names_and_paths("unet_gguf", ["diffusion_models", "unet"])
 
-try:
-    from comfy.latent_formats import Wan21, Wan22
-    latent_format = Wan21
-except: #for backwards compatibility
-    log.warning("WARNING: Wan21 latent format not found, update ComfyUI for better live video preview")
-    from comfy.latent_formats import HunyuanVideo
-    latent_format = HunyuanVideo
-
 class WanVideoModel(torch.nn.Module):
     def __init__(self, model_config, transformer, device=None):
         super().__init__()
@@ -77,7 +70,7 @@ class WanVideoModel(torch.nn.Module):
         self.pipeline[k] = v
 
 class WanVideoModelConfig:
-    def __init__(self, latent_format=latent_format):
+    def __init__(self, latent_format=Wan21):
         self.unet_config = {}
         self.unet_extra_config = {}
         self.latent_format = latent_format
