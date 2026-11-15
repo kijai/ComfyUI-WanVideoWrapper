@@ -352,6 +352,7 @@ class MultiTalkSilentEmbeds:
     def INPUT_TYPES(s):
         return {"required": {
             "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 1, "tooltip": "The total frame count to generate."}),
+            "audio_scale": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 100.0, "step": 0.01, "tooltip": "Strength of the audio conditioning"}),
         },
         }
 
@@ -360,17 +361,17 @@ class MultiTalkSilentEmbeds:
     FUNCTION = "process"
     CATEGORY = "WanVideoWrapper"
 
-    def process(self, num_frames):
+    def process(self, num_frames, audio_scale):
         silence_path = os.path.join(script_directory, "encoded_silence.safetensors")
         encoded_silence = load_torch_file(silence_path)["audio_emb"]
-       
+
         target_frames = num_frames
         repeats = (target_frames + encoded_silence.shape[0] - 1) // encoded_silence.shape[0]
         repeated = encoded_silence.repeat(repeats, 1, 1)
         repeated = repeated[:target_frames]
         multitalk_embeds = {
             "audio_features": repeated,
-            "audio_scale": 1.0,
+            "audio_scale": audio_scale,
             "audio_cfg_scale": 1.0,
             "ref_target_masks": None
         }
