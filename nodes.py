@@ -991,6 +991,7 @@ class WanVideoImageToVideoEncode:
             "num_frames": ("INT", {"default": 81, "min": 1, "max": 10000, "step": 4, "tooltip": "Number of frames to encode"}),
             "noise_aug_strength": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Strength of noise augmentation, helpful for I2V where some noise can add motion and give sharper results"}),
             "start_latent_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional latent multiplier, helpful for I2V where lower values allow for more motion"}),
+            "middle_latent_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional latent multiplier for middle frame"}),
             "end_latent_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.001, "tooltip": "Additional latent multiplier, helpful for I2V where lower values allow for more motion"}),
             "force_offload": ("BOOLEAN", {"default": True}),
             },
@@ -998,6 +999,7 @@ class WanVideoImageToVideoEncode:
                 "vae": ("WANVAE",),
                 "clip_embeds": ("WANVIDIMAGE_CLIPEMBEDS", {"tooltip": "Clip vision encoded image"}),
                 "start_image": ("IMAGE", {"tooltip": "Image to encode"}),
+                "middle_image": ("IMAGE", {"tooltip": "Middle frame image"}),
                 "end_image": ("IMAGE", {"tooltip": "end frame"}),
                 "control_embeds": ("WANVIDIMAGE_EMBEDS", {"tooltip": "Control signal for the Fun -model"}),
                 "fun_or_fl2v_model": ("BOOLEAN", {"default": True, "tooltip": "Enable when using official FLF2V or Fun model"}),
@@ -1007,6 +1009,8 @@ class WanVideoImageToVideoEncode:
                 "add_cond_latents": ("ADD_COND_LATENTS", {"advanced": True, "tooltip": "Additional cond latents WIP"}),
                 "augment_empty_frames": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 10.0, "step": 0.01, "tooltip": "EXPERIMENTAL: Augment empty frames with the difference to the start image to force more motion"}),
                 "empty_frame_pad_image": ("IMAGE", {"tooltip": "Use this image to pad empty frames instead of gray, used with SVI-shot and SVI 2.0 LoRAs"}),
+                "middle_position_ratio": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01, 
+                                                    "tooltip": "Position ratio for middle frame (0.0=start, 1.0=end)"}),
             }
         }
 
@@ -1028,12 +1032,26 @@ class WanVideoImageToVideoEncode:
         lat_w = W // vae.upsampling_factor
 
         num_frames = ((num_frames - 1) // 4) * 4 + 1
-        two_ref_images = start_image is not None and end_image is not None
+        triple_ref_images = start_image is not None and middle_image is not None and end_image is not None
+        two_ref_images = (start_image is not None and end_image is not None) or \
+                        (start_image is not None and middle_image is not None) or \
+                        (middle_image is not None and end_image is not None)
 
-        if start_image is None and end_image is not None:
-            fun_or_fl2v_model = True # end image alone only works with this option
+        if middle_image is not None or (start_image is None and end_image is not None):
+            fun_or_fl2v_model = True 
+            # end image and middle image default to enabling fun_or_fl2v_model. However, fun_or_fl2v_model does not seem to take effect for middle image. It is speculated that further modifications may be needed in sampler
 
         base_frames = num_frames + (1 if two_ref_images and not fun_or_fl2v_model else 0)
+        
+        if middle_image is not None:
+            middle_pos = int((num_frames - 1) * middle_position_ratio)
+            middle_pos = max(0, min(middle_pos, num_frames - middle_image.shape[0]))
+
+            if start_image is not None:
+                middle_pos = max(middle_pos, start_image.shape[0])
+            if end_image is not None:
+                middle_pos = min(middle_pos, num_frames - end_image.shape[0]) 
+                
         if temporal_mask is None:
             mask = torch.zeros(1, base_frames, lat_h, lat_w, device=device, dtype=vae.dtype)
             if start_image is not None:
@@ -1051,18 +1069,46 @@ class WanVideoImageToVideoEncode:
         pixel_mask = mask.clone()
 
         # Repeat first frame and optionally end frame
+        if temporal_mask is None:
+            mask = torch.zeros(1, base_frames, lat_h, lat_w, device=device, dtype=vae.dtype)
+
+            if start_image is not None:
+                mask[:, 0:start_image.shape[0]] = 1
+
+            if end_image is not None:
+                mask[:, -end_image.shape[0]:] = 1
+
+            if middle_image is not None:
+                middle_frames = middle_image.shape[0]
+                mask_pos = middle_pos
+                mask[:, mask_pos:mask_pos + middle_frames] = 1
+        else:
+            mask = common_upscale(temporal_mask.unsqueeze(1).to(device), lat_w, lat_h, "nearest", "disabled").squeeze(1)
+            if mask.shape[0] > base_frames:
+                mask = mask[:base_frames]
+            elif mask.shape[0] < base_frames:
+                mask = torch.cat([mask, torch.zeros(base_frames - mask.shape[0], lat_h, lat_w, device=device)])
+            mask = mask.unsqueeze(0).to(device, vae.dtype)
+
+        pixel_mask = mask.clone()
+
         start_mask_repeated = torch.repeat_interleave(mask[:, 0:1], repeats=4, dim=1) # T, C, H, W
+        
         if end_image is not None and not fun_or_fl2v_model:
             end_mask_repeated = torch.repeat_interleave(mask[:, -1:], repeats=4, dim=1) # T, C, H, W
             mask = torch.cat([start_mask_repeated, mask[:, 1:-1], end_mask_repeated], dim=1)
         else:
             mask = torch.cat([start_mask_repeated, mask[:, 1:]], dim=1)
-
+            
         # Reshape mask into groups of 4 frames
         mask = mask.view(1, mask.shape[1] // 4, 4, lat_h, lat_w) # 1, T, C, H, W
         mask = mask.movedim(1, 2)[0]# C, T, H, W
 
         # Resize and rearrange the input image dimensions
+        resized_start_image = None
+        resized_middle_image = None
+        resized_end_image = None
+        
         if start_image is not None:
             start_image = start_image[..., :3]
             if start_image.shape[1] != H or start_image.shape[2] != W:
@@ -1072,6 +1118,16 @@ class WanVideoImageToVideoEncode:
             resized_start_image = resized_start_image * 2 - 1
             if noise_aug_strength > 0.0:
                 resized_start_image = add_noise_to_reference_video(resized_start_image, ratio=noise_aug_strength)
+
+        if middle_image is not None:
+            middle_image = middle_image[..., :3]
+            if middle_image.shape[1] != H or middle_image.shape[2] != W:
+                resized_middle_image = common_upscale(middle_image.movedim(-1, 1), W, H, "lanczos", "disabled").movedim(0, 1)
+            else:
+                resized_middle_image = middle_image.permute(3, 0, 1, 2) # C, T, H, W
+            resized_middle_image = resized_middle_image * 2 - 1
+            if noise_aug_strength > 0.0:
+                resized_middle_image = add_noise_to_reference_video(resized_middle_image, ratio=noise_aug_strength)
 
         if end_image is not None:
             end_image = end_image[..., :3]
@@ -1084,23 +1140,58 @@ class WanVideoImageToVideoEncode:
                 resized_end_image = add_noise_to_reference_video(resized_end_image, ratio=noise_aug_strength)
 
         # Concatenate image with zero frames and encode
-        if start_image is not None and end_image is None:
+        if triple_ref_images:
+            concatenated = torch.zeros(3, num_frames, H, W, device=device, dtype=vae.dtype)
+
+            if start_image is not None:
+                concatenated[:, 0:start_image.shape[0]] = resized_start_image.to(device, dtype=vae.dtype)
+
+            if middle_image is not None:
+                concatenated[:, middle_pos:middle_pos + middle_image.shape[0]] = resized_middle_image.to(device, dtype=vae.dtype)
+
+            if end_image is not None:
+                concatenated[:, -end_image.shape[0]:] = resized_end_image.to(device, dtype=vae.dtype)
+                
+        elif start_image is not None and end_image is None and middle_image is None:
             zero_frames = torch.zeros(3, num_frames-start_image.shape[0], H, W, device=device, dtype=vae.dtype)
             concatenated = torch.cat([resized_start_image.to(device, dtype=vae.dtype), zero_frames], dim=1)
-            del resized_start_image, zero_frames
-        elif start_image is None and end_image is not None:
+            del zero_frames
+            
+        elif start_image is None and end_image is not None and middle_image is None:
             zero_frames = torch.zeros(3, num_frames-end_image.shape[0], H, W, device=device, dtype=vae.dtype)
             concatenated = torch.cat([zero_frames, resized_end_image.to(device, dtype=vae.dtype)], dim=1)
             del zero_frames
-        elif start_image is None and end_image is None:
+            
+        elif start_image is None and end_image is None and middle_image is None:
             concatenated = torch.zeros(3, num_frames, H, W, device=device, dtype=vae.dtype)
-        else:
+            
+        elif start_image is not None and end_image is not None and middle_image is None:
             if fun_or_fl2v_model:
                 zero_frames = torch.zeros(3, num_frames-(start_image.shape[0]+end_image.shape[0]), H, W, device=device, dtype=vae.dtype)
             else:
                 zero_frames = torch.zeros(3, num_frames-1, H, W, device=device, dtype=vae.dtype)
             concatenated = torch.cat([resized_start_image.to(device, dtype=vae.dtype), zero_frames, resized_end_image.to(device, dtype=vae.dtype)], dim=1)
-            del resized_start_image, zero_frames
+            del zero_frames
+            
+        elif start_image is not None and middle_image is not None and end_image is None:
+            total_frames = start_image.shape[0] + middle_image.shape[0]
+            zero_frames = torch.zeros(3, num_frames - total_frames, H, W, device=device, dtype=vae.dtype)
+            concatenated = torch.cat([
+                resized_start_image.to(device, dtype=vae.dtype),
+                resized_middle_image.to(device, dtype=vae.dtype),
+                zero_frames
+            ], dim=1)
+            del zero_frames
+            
+        elif start_image is None and middle_image is not None and end_image is not None:
+            total_frames = middle_image.shape[0] + end_image.shape[0]
+            zero_frames = torch.zeros(3, num_frames - total_frames, H, W, device=device, dtype=vae.dtype)
+            concatenated = torch.cat([
+                zero_frames,
+                resized_middle_image.to(device, dtype=vae.dtype),
+                resized_end_image.to(device, dtype=vae.dtype)
+            ], dim=1)
+            del zero_frames
 
         if empty_frame_pad_image is not None:
             pad_img = empty_frame_pad_image.clone()[..., :3]
@@ -1118,11 +1209,15 @@ class WanVideoImageToVideoEncode:
             frame_is_empty = (pixel_mask[0].mean(dim=(-2, -1)) < 0.5)[:concatenated.shape[1]].clone()
             if start_image is not None:
                 frame_is_empty[:start_image.shape[0]] = False
+            if middle_image is not None:
+                middle_frame_start = middle_pos
+                middle_frame_end = middle_pos + middle_image.shape[0]
+                frame_is_empty[middle_frame_start:middle_frame_end] = False
             if end_image is not None:
                 frame_is_empty[-end_image.shape[0]:] = False
 
             concatenated[:, frame_is_empty] = pad_img[:, frame_is_empty]
-
+            
         mm.soft_empty_cache()
         gc.collect()
 
@@ -1137,8 +1232,15 @@ class WanVideoImageToVideoEncode:
             mask = torch.cat([torch.ones_like(mask[:, 0:samples.shape[1]]), mask], dim=1)
             num_frames += samples.shape[1] * 4
             has_ref = True
-        y[:, :1] *= start_latent_strength
-        y[:, -1:] *= end_latent_strength
+            
+        if start_image is not None:
+            y[:, :1] *= start_latent_strength
+        if middle_image is not None:
+            middle_latent_pos = middle_pos // 4
+            y[:, middle_latent_pos:middle_latent_pos + 1] *= middle_latent_strength
+        if end_image is not None:
+            y[:, -1:] *= end_latent_strength
+            
         if augment_empty_frames > 0.0:
             frame_is_empty = (mask[0].mean(dim=(-2, -1)) < 0.5).view(1, -1, 1, 1)
             y = y[:, :1] + (y - y[:, :1]) * ((augment_empty_frames+1) * frame_is_empty + ~frame_is_empty)
@@ -1166,6 +1268,8 @@ class WanVideoImageToVideoEncode:
             "lat_w": lat_w,
             "control_embeds": control_embeds["control_embeds"] if control_embeds is not None else None,
             "end_image": resized_end_image if end_image is not None else None,
+            "middle_image": resized_middle_image if middle_image is not None else None,
+            "middle_position": middle_pos if middle_image is not None else None,
             "fun_or_fl2v_model": fun_or_fl2v_model,
             "has_ref": has_ref,
             "add_cond_latents": add_cond_latents,
@@ -1173,6 +1277,7 @@ class WanVideoImageToVideoEncode:
         }
 
         return (image_embeds,)
+
 
 # region WanAnimate
 class WanVideoAnimateEmbeds:
