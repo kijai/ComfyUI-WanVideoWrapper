@@ -457,7 +457,7 @@ class WanVideoDiffusionForcingSampler:
             with torch.autocast(device_type=mm.get_autocast_device(device), dtype=dtype, enabled=("fp8" in model["quantization"])):
 
                 if use_cfg_zero_star and (idx <= zero_star_steps) and use_zero_init:
-                    return latent_model_input*0, None
+                    return latent_model_input*0, teacache_state
 
                 nonlocal patcher
                 current_step_percentage = idx / len(init_timesteps)
