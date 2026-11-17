@@ -3,7 +3,7 @@
 
 ## Memory use update (again)
 
-I've made everythign less reliant on torch.compile for VRAM efficiency, so things should work better even without it. Also figured workaround for some issues when using compile that made first run use drastically more VRAM, issue I battled with myself a lot.
+I've made everything less reliant on torch.compile for VRAM efficiency, so things should work better even without it. Also figured workaround for some issues when using compile that made first run use drastically more VRAM, issue I battled with myself a lot.
 
 
 ## Update notification that can affect memory use in old workflows
