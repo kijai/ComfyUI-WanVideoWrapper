@@ -79,8 +79,11 @@ def init_recognition_model(model_name, half=False, device='cuda', model_rootpath
     else:
         raise NotImplementedError(f'{model_name} is not implemented.')
 
+    # Always use ComfyUI models directory
+    save_dir = os.path.join(model_rootpath, 'facexlib', 'weights')
     model_path = load_file_from_url(
-        url=model_url, model_dir='facexlib/weights', progress=True, file_name=None, save_dir=model_rootpath)
+        url=model_url, model_dir=None, progress=True, file_name=None, save_dir=save_dir)
+
     print("Loading model from:", model_path)
     model.load_state_dict(torch.load(model_path), strict=True)
     model.eval()
@@ -93,9 +96,9 @@ class FaceEncoderArcFace():
     def __repr__(self):
         return "ArcFace"
 
-    def init_encoder_model(self, device, eval_mode=True):
+    def init_encoder_model(self, device, eval_mode=True, model_rootpath=None):
         self.device = device
-        self.encoder_model = init_recognition_model('arcface', device=device)
+        self.encoder_model = init_recognition_model('arcface', device=device, model_rootpath=model_rootpath)
 
         if eval_mode:
             self.encoder_model.eval()
