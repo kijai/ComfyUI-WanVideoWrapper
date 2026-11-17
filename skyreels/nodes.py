@@ -621,10 +621,80 @@ class WanVideoDiffusionForcingSampler:
         return ({
             "samples": x0.cpu(),
             }, )
+        
+class WanVideoDiffusionForcingCombine:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "reference_frames": ("INT", {"default": 17, "min": 3, "max": 1441, "step": 1}),
+                "use_blending": ("BOOLEAN", {"default": True}),
+                "image_1": ("IMAGE", ),
+                "image_2": ("IMAGE", ),
+            },
+            "optional": {
+                "image_3": ("IMAGE", ),
+                "image_4": ("IMAGE", ),
+                "image_5": ("IMAGE", ),
+                "image_6": ("IMAGE", ),
+                "image_7": ("IMAGE", ),
+                "image_8": ("IMAGE", ),                                                               
+            }
+    }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("images",)
+    FUNCTION = "combine"
+    CATEGORY = "WanVideoWrapper"
+
+    def combine_batch_blend(self, clip_a, clip_b, blend_length):
+        n_a, h_a, w_a, c_a = clip_a.shape
+        n_b, h_b, w_b, c_b = clip_b.shape
+
+        if blend_length > n_a or blend_length > n_b:
+            raise ValueError("Blend length exceeds number of frames")
+
+        if (h_a, w_a, c_a) != (h_b, w_b, c_b):
+            raise ValueError("Clip shapes must match for blending")
+
+        # Split regions
+        a_main = clip_a[:-blend_length]     # Keep first part of A
+        a_fade = clip_a[-blend_length:]     # Last N frames of A
+        b_fade = clip_b[:blend_length]      # First N frames of B
+        b_main = clip_b[blend_length:]      # Remaining B
+
+        # Blend overlap region
+        weights = torch.linspace(0, 1, steps=blend_length, dtype=torch.float32).view(-1, 1, 1, 1)
+        blended = torch.lerp(a_fade, b_fade, weights)
+        return torch.cat([a_main, blended, b_main], dim=0)
+    
+    def combine(self, reference_frames, use_blending, image_1, image_2, **kwargs):
+        opt_count = len(kwargs)
+        img_count = 2 + opt_count
+        # collect required images
+        inputs: list[torch.Tensor] = []
+        inputs.append(image_1)
+        inputs.append(image_2)
+        # collect optional images
+        for i in range(0, opt_count):
+            inputs.append(kwargs[f"image_{i+3}"])
+            
+        if use_blending:
+            output = self.combine_batch_blend(image_1, image_2, reference_frames)  
+            for i in range(1, img_count - 1):
+                output = self.combine_batch_blend(output, inputs[i+1], reference_frames)
+        else:
+            output = torch.cat([inputs[0], inputs[1][reference_frames:]], dim=0)
+            for i in range(1, img_count - 1):
+                output = torch.cat([output, inputs[i+1][reference_frames:]], dim=0)
+            
+        return (output,)
 
 NODE_CLASS_MAPPINGS = {
     "WanVideoDiffusionForcingSampler": WanVideoDiffusionForcingSampler,
+    "WanVideoDiffusionForcingCombine": WanVideoDiffusionForcingCombine,
     }
 NODE_DISPLAY_NAME_MAPPINGS = {
     "WanVideoDiffusionForcingSampler": "WanVideo Diffusion Forcing Sampler",
+    "WanVideoDiffusionForcingCombine": "WanVideo Diffusion Forcing Combine"
     }
