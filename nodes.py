@@ -231,7 +231,7 @@ of the original Wan templates or a custom system prompt.
         # Handle prompt extension with in-memory cache
         orig_prompt = positive_prompt
         if extender_args is not None:
-            extender_key = (orig_prompt, str(extender_args))
+            extender_key = (orig_prompt, str(extender_args), precision, device)
             if extender_key in _extender_cache:
                 positive_prompt = _extender_cache[extender_key]
                 log.info(f"Loaded extended prompt from in-memory cache: {positive_prompt}")
