@@ -2,6 +2,7 @@ import os, gc, math
 import torch
 import torch.nn.functional as F
 import hashlib
+import json
 from tqdm import tqdm
 
 from .utils import(log, clip_encode_image_tiled, add_noise_to_reference_video, set_module_tensor_to_device)
@@ -153,20 +154,22 @@ _extender_cache = {}
 
 cache_dir = os.path.join(script_directory, 'text_embed_cache')
 
-def get_cache_path(prompt):
+def get_cache_path(prompt, cache_scope=None):
     cache_key = prompt.strip()
+    if cache_scope is not None:
+        cache_key = json.dumps([*cache_scope, cache_key], ensure_ascii=False)
     cache_hash = hashlib.sha256(cache_key.encode('utf-8')).hexdigest()
     return os.path.join(cache_dir, f"{cache_hash}.pt")
 
-def get_cached_text_embeds(positive_prompt, negative_prompt):
+def get_cached_text_embeds(positive_prompt, negative_prompt, cache_scope=None):
     
     os.makedirs(cache_dir, exist_ok=True)
 
     context = None
     context_null = None
 
-    pos_cache_path = get_cache_path(positive_prompt)
-    neg_cache_path = get_cache_path(negative_prompt)
+    pos_cache_path = get_cache_path(positive_prompt, cache_scope)
+    neg_cache_path = get_cache_path(negative_prompt, cache_scope)
 
     # Try to load positive prompt embeds
     if os.path.exists(pos_cache_path):
@@ -228,7 +231,7 @@ of the original Wan templates or a custom system prompt.
         # Handle prompt extension with in-memory cache
         orig_prompt = positive_prompt
         if extender_args is not None:
-            extender_key = (orig_prompt, str(extender_args))
+            extender_key = (orig_prompt, str(extender_args), precision, device)
             if extender_key in _extender_cache:
                 positive_prompt = _extender_cache[extender_key]
                 log.info(f"Loaded extended prompt from in-memory cache: {positive_prompt}")
@@ -253,9 +256,10 @@ of the original Wan templates or a custom system prompt.
                 del qwen
             pbar.update(1)
 
-        # Now check disk cache using the (possibly extended) prompt
+        cache_scope = (model_name, precision, quantization, device)
+        # Check the (possibly extended) prompt for these encoder settings.
         if use_disk_cache:
-            context, context_null = get_cached_text_embeds(positive_prompt, negative_prompt)
+            context, context_null = get_cached_text_embeds(positive_prompt, negative_prompt, cache_scope)
             if context is not None and context_null is not None:
                 return{
                     "prompt_embeds": context,
@@ -273,7 +277,8 @@ of the original Wan templates or a custom system prompt.
             force_offload=False,
             model_to_offload=None,
             use_disk_cache=use_disk_cache,
-            device=device
+            device=device,
+            cache_scope=cache_scope,
         )
         pbar.update(1)
         del t5
@@ -305,14 +310,14 @@ class WanVideoTextEncode:
     DESCRIPTION = "Encodes text prompts into text embeddings. For rudimentary prompt travel you can input multiple prompts separated by '|', they will be equally spread over the video length"
 
 
-    def process(self, positive_prompt, negative_prompt, t5=None, force_offload=True, model_to_offload=None, use_disk_cache=False, device="gpu"):
+    def process(self, positive_prompt, negative_prompt, t5=None, force_offload=True, model_to_offload=None, use_disk_cache=False, device="gpu", cache_scope=None):
         if t5 is None and not use_disk_cache:
             raise ValueError("T5 encoder is required for text encoding. Please provide a valid T5 encoder or enable disk cache.")
 
         echoshot = True if "[1]" in positive_prompt else False
 
         if use_disk_cache:
-            context, context_null = get_cached_text_embeds(positive_prompt, negative_prompt)
+            context, context_null = get_cached_text_embeds(positive_prompt, negative_prompt, cache_scope)
             if context is not None and context_null is not None:
                 return{
                     "prompt_embeds": context,
@@ -416,8 +421,8 @@ class WanVideoTextEncode:
 
         # Save each part to its own cache file if needed
         if use_disk_cache:
-            pos_cache_path = get_cache_path(positive_prompt)
-            neg_cache_path = get_cache_path(negative_prompt)
+            pos_cache_path = get_cache_path(positive_prompt, cache_scope)
+            neg_cache_path = get_cache_path(negative_prompt, cache_scope)
             try:
                 if not os.path.exists(pos_cache_path):
                     torch.save(context, pos_cache_path)
